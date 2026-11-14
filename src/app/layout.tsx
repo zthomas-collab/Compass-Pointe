@@ -22,7 +22,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: brand.colors.primary };
 
-const navLink = "rounded-md px-2 py-2 text-sm font-semibold text-white hover:bg-white/10";
+const navLink = "whitespace-nowrap rounded-md px-3 py-2 text-[0.95rem] font-semibold text-white underline-offset-8 decoration-gold decoration-2 hover:bg-white/10 hover:underline focus-visible:underline";
+const authLink = "whitespace-nowrap rounded-md border border-white/70 px-4 py-1.5 text-sm font-semibold text-white hover:bg-white/15";
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -48,8 +49,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </aside>
         )}
         <header className="border-b-4 border-gold bg-brand text-white">
-          <nav aria-label="Main" className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-1 gap-y-1 px-4 py-2">
-            <div className="py-1">
+          <nav aria-label="Main" className="mx-auto flex max-w-[90rem] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 lg:flex-nowrap lg:px-6">
+            <div className="shrink-0">
               {brand.logoPath ? (
                 <Link href="/" className="block rounded-md bg-white px-4 py-2 shadow-sm sm:px-6 sm:py-3" aria-label={`${brand.name} home`}>
                   <BrandLogo src={brand.logoPath} size={brand.logoSize} name={brand.name} tagline={brand.tagline} className="h-14 sm:h-[5.25rem]" />
@@ -61,32 +62,33 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 </Link>
               )}
             </div>
-            {/* Links share the space between the logo and the page edge evenly. */}
-            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-evenly gap-x-1 gap-y-1">
-            <Link href="/" className={navLink}>Map</Link>
-            <Link href="/contacts" className={navLink}>Contacts</Link>
-            <Link href="/assistance" className={navLink}>Request help</Link>
-            <Link href="/volunteer" className={navLink}>Volunteer &amp; donate</Link>
-            <Link href="/projects" className={navLink}>Projects</Link>
-            <Link href="/safety" className={navLink}>Safety</Link>
-            {user ? (
-              <>
-                <Link href="/dashboard" className={navLink}>Dashboard</Link>
-                <Link href="/dashboard/commitments" className={navLink}>Commitments</Link>
-                <Link href="/account/security" className={navLink}>Security</Link>
-                {isAdmin && <Link href="/admin" className={navLink}>Admin</Link>}
-                <form action={signOutAction}>
-                  <button className={`${navLink} underline`}>Sign out</button>
-                </form>
-              </>
-            ) : (
-              <>
-                <Link href="/signin?tab=register" className="btn btn-attention min-h-10 px-3 py-1.5 text-sm">
-                  Register Your Organization
-                </Link>
-                <Link href="/signin" className={navLink}>Sign in</Link>
-              </>
-            )}
+            {/* Sign-in cluster sits beside the logo on small screens (order-2) and at the far right on wide ones. */}
+            <div className="order-2 flex min-w-0 max-w-full flex-wrap items-center gap-2 sm:ml-auto lg:order-3 lg:ml-0 lg:shrink-0 lg:flex-nowrap">
+              {user ? (
+                <>
+                  <Link href="/dashboard" className={authLink}>Dashboard</Link>
+                  {isAdmin && <Link href="/admin" className={authLink}>Admin</Link>}
+                  <form action={signOutAction}>
+                    <button className={authLink}>Sign out</button>
+                  </form>
+                </>
+              ) : (
+                <>
+                  <Link href="/signin?tab=register" className="btn btn-attention min-h-10 whitespace-nowrap px-4 py-1.5 text-sm font-bold">
+                    Register Your Organization
+                  </Link>
+                  <Link href="/signin" className={authLink}>Sign in</Link>
+                </>
+              )}
+            </div>
+            {/* Page links share the space between the logo and the sign-in cluster evenly; on small screens they take their own row. */}
+            <div className="order-3 flex w-full min-w-0 flex-wrap items-center justify-evenly gap-x-1 gap-y-1 border-t border-white/15 pt-2 lg:order-2 lg:w-auto lg:flex-1 lg:border-0 lg:pt-0">
+              <Link href="/" className={navLink}>Map</Link>
+              <Link href="/contacts" className={navLink}>Contacts</Link>
+              <Link href="/assistance" className={navLink}>Request help</Link>
+              <Link href="/volunteer" className={navLink}>Volunteer &amp; donate</Link>
+              <Link href="/projects" className={navLink}>Projects</Link>
+              <Link href="/safety" className={navLink}>Safety</Link>
             </div>
           </nav>
         </header>

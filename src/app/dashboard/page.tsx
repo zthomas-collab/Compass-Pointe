@@ -31,6 +31,7 @@ export default async function DashboardPage() {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6">
       <h1 className="text-2xl font-bold">Dashboard</h1>
+      <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm"><Link className="underline" href="/dashboard/commitments">My commitments</Link><Link className="underline" href="/account/security">Account security</Link></p>
       <p className="text-sm text-muted">Signed in as {user.displayName} ({user.email})</p>
       {user.platformRoles.length > 0 && (
         <p className="mt-1 text-sm">Platform roles: {user.platformRoles.join(", ")}</p>
