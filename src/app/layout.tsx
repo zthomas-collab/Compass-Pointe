@@ -49,10 +49,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         )}
         <header className="border-b-4 border-gold bg-brand text-white">
           <nav aria-label="Main" className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-1 gap-y-1 px-4 py-2">
-            <div className="mr-auto py-1">
+            <div className="py-1">
               {brand.logoPath ? (
-                <Link href="/" className="block rounded-md bg-white px-3 py-1.5 shadow-sm" aria-label={`${brand.name} home`}>
-                  <BrandLogo src={brand.logoPath} size={brand.logoSize} name={brand.name} tagline={brand.tagline} className="h-10 sm:h-12" />
+                <Link href="/" className="block rounded-md bg-white px-4 py-2 shadow-sm sm:px-6 sm:py-3" aria-label={`${brand.name} home`}>
+                  <BrandLogo src={brand.logoPath} size={brand.logoSize} name={brand.name} tagline={brand.tagline} className="h-14 sm:h-[5.25rem]" />
                 </Link>
               ) : (
                 <Link href="/" className="flex items-center gap-2 text-xl font-bold tracking-tight text-white" aria-label={`${brand.name} home`}>
@@ -61,14 +61,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 </Link>
               )}
             </div>
+            {/* Links share the space between the logo and the page edge evenly. */}
+            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-evenly gap-x-1 gap-y-1">
             <Link href="/" className={navLink}>Map</Link>
             <Link href="/contacts" className={navLink}>Contacts</Link>
             <Link href="/assistance" className={navLink}>Request help</Link>
             <Link href="/volunteer" className={navLink}>Volunteer &amp; donate</Link>
+            <Link href="/projects" className={navLink}>Projects</Link>
             <Link href="/safety" className={navLink}>Safety</Link>
             {user ? (
               <>
                 <Link href="/dashboard" className={navLink}>Dashboard</Link>
+                <Link href="/dashboard/commitments" className={navLink}>Commitments</Link>
                 <Link href="/account/security" className={navLink}>Security</Link>
                 {isAdmin && <Link href="/admin" className={navLink}>Admin</Link>}
                 <form action={signOutAction}>
@@ -77,12 +81,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               </>
             ) : (
               <>
-                <Link href="/signin" className={navLink}>Sign in</Link>
-                <Link href="/signin?tab=register" className="btn btn-attention ml-1 min-h-10 px-3 py-1.5 text-sm">
+                <Link href="/signin?tab=register" className="btn btn-attention min-h-10 px-3 py-1.5 text-sm">
                   Register Your Organization
                 </Link>
+                <Link href="/signin" className={navLink}>Sign in</Link>
               </>
             )}
+            </div>
           </nav>
         </header>
         <main id="main" className="flex flex-1 flex-col">{children}</main>
