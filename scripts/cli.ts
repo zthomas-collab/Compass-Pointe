@@ -3,6 +3,7 @@
  * PGlite is single-process: STOP the dev server before running these against .data/pglite.
  *
  *   npm run db:migrate
+ *   npm run demo:seed                     # local demo accounts and sample data for every screen (see scripts/demo.ts)
  *   npm run db:seed                       # synthetic demo data (labelled [SYNTHETIC])
  *   npm run admin:grant -- <email> [PLATFORM_ADMIN|SECURITY_ADMIN|ROAD_VERIFIER] "<reason>"
  *   npm run notifications:send [-- --watch]   # deliver queued email (needs EMAIL_TRANSPORT=smtp, SMTP_URL, EMAIL_FROM)
@@ -194,6 +195,13 @@ async function main() {
     await db.close();
   } else if (cmd === "seed") {
     await seed();
+  } else if (cmd === "demo") {
+    await seed(); // synthetic organizations and sites (skips when already present)
+    const { seedDemo } = await import("./demo");
+    const db = await createDriver();
+    await migrate(db);
+    for (const line of await seedDemo(db)) console.log(line);
+    await db.close();
   } else if (cmd === "zips") {
     await importZips(args[0]);
   } else if (cmd === "grant") {
@@ -229,7 +237,7 @@ async function main() {
     console.log(`MFA removed for ${email}; their sessions were ended. They must enroll again at next sign-in.`);
     await db.close();
   } else {
-    console.log("Commands: migrate | seed | grant <email> [role] [reason] | mfa-reset <email> <reason> | notifications [--watch]");
+    console.log("Commands: migrate | seed | grant <email> [role] [reason] | mfa-reset <email> <reason> | notifications [--watch] | demo");
     process.exitCode = 1;
   }
 }

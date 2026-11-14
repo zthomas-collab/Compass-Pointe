@@ -36,6 +36,8 @@ npm run db:seed
 npm run admin:grant -- admin@example.test PLATFORM_ADMIN "local bootstrap"
 npm run dev
 ```
+
+For a local tour of every screen (executive, county, nonprofit and resident views) stop the dev server and run `npm run demo:seed`. It creates `admin@crisiscompass.test`, `county.admin@crisiscompass.test` and `resident@crisiscompass.test` with sample offers, projects, events and requests; sign-in links appear at `/dev/outbox`. Local only: never run it against a real database.
 Open http://localhost:3000. Optional: load ZIP centroids for Contacts radius search with `npm run zips:import -- <Census ZCTA gazetteer .txt>`. Sign-in links for local accounts appear at http://localhost:3000/dev/outbox. All seeded records are labelled **[SYNTHETIC]**.
 
 ## Documentation

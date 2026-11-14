@@ -84,3 +84,15 @@ Built since the audit (uncommitted until the owner approves):
 | Resident sign-up `/signup`, request list `/assistance`, form `/assistance/new`, tracker `/assistance/[id]` (reply to info requests, withdraw, upload/remove documents), staff queue `/admin/applications`, staff detail `/admin/applications/[id]` (status moves, notes), document download route | Built on the existing, tested service layer. **Not yet exercised in a browser**, no UI-level automated tests, and still gated off in production. Provider (nonprofit) accept/decline UI and routing-rule admin UI are not built. |
 
 Still open: executive settings page (destination email), volunteer/donation intake, community projects and matching, events, dashboards, `/learn`, retention job, browser/accessibility pass.
+
+**Later 2026-11-14:** built since the progress log above (each with automated tests; none exercised by a person in a browser beyond page-load and role-isolation smoke checks):
+
+| Item | State |
+|---|---|
+| Volunteer and donation offers (migration 0012): public form, reference numbers, queued notification email to an executive-set address, review dashboard, status flow, county isolation | Done, 9 tests |
+| Community projects (migration 0013): ZIP-level needs, suggest-only matching, explicit acceptance, separate offered/accepted/dispatched/received/verified quantities, DB-enforced no double-allocation, automatic completion, public summary pages, nonprofit commitments page | Done, 10 tests. Receipt confirmer is a typed name, not a separate login. |
+| Events and logistics (migration 0014): events with ZIPs, calendar, task board, sortable logistics table, requirements, participating organizations, linked projects, public summaries; internal notes column-protected | Done, 8 tests (with dashboards) |
+| Executive, county and nonprofit dashboards (`/admin/dashboard`, `/dashboard/overview`), counted live from records, filtered by county, resource type and date | Done |
+| Local demo accounts and sample data (`npm run demo:seed`, `scripts/demo.ts`) | Done; local only |
+
+Still open: provider (nonprofit) accept/decline UI for referred assistance requests, routing-rule admin UI, `/learn` (YouTube only, with moderation), data retention job, projects on the public map, browser-based accessibility pass, UI-level automated tests.
