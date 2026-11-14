@@ -30,6 +30,14 @@ export default async function AdminHome() {
           <p className="mt-1 text-sm text-muted">Review, route and update requests for your counties.</p>
         </li>
         <li className="card p-4">
+          <Link className="text-lg font-semibold text-brand underline" href="/admin/dashboard">Operations dashboard</Link>
+          <p className="mt-1 text-sm text-muted">{executive ? "Platform-wide" : "County"} metrics counted live: requests, needs, donations, volunteers, deliveries.</p>
+        </li>
+        <li className="card p-4">
+          <Link className="text-lg font-semibold text-brand underline" href="/admin/events">Events and logistics</Link>
+          <p className="mt-1 text-sm text-muted">Calendar, task board, requirements and the sortable logistics table.</p>
+        </li>
+        <li className="card p-4">
           <Link className="text-lg font-semibold text-brand underline" href="/admin/projects">Community projects</Link>
           <p className="mt-1 text-sm text-muted">ZIP-level needs, matches, commitments and verified deliveries.</p>
         </li>
