@@ -11,10 +11,12 @@ import { submitApplicationAction } from "../actions";
 export const metadata: Metadata = { title: "Request assistance", robots: { index: false } };
 export const dynamic = "force-dynamic";
 
-export default async function NewApplicationPage() {
+export default async function NewApplicationPage({ searchParams }: { searchParams: Promise<{ zip?: string }> }) {
+  const sp = await searchParams;
   if (!assistanceReadiness().ready) return <NotReady />;
   const user = await getCurrentUser();
   if (!user) redirect("/signup");
+  const defaultZip = sp.zip && /^\d{5}$/.test(sp.zip) ? sp.zip : undefined;
   const db = await getDriver();
   const [counties, categories] = await Promise.all([listCounties(db), listAssistanceCategories(db)]);
   return (
@@ -22,7 +24,7 @@ export default async function NewApplicationPage() {
       <h1 className="text-3xl">Request assistance</h1>
       <p className="mt-2 text-muted">Tell us what you need. County staff review your request and update you by email and on this site.</p>
       <div className="card mt-5 p-4">
-        <ApplicationForm action={submitApplicationAction} counties={counties} categories={categories} />
+        <ApplicationForm action={submitApplicationAction} counties={counties} categories={categories} defaultZip={defaultZip} />
       </div>
     </div>
   );

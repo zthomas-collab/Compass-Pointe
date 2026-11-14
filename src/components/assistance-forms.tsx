@@ -29,7 +29,7 @@ export function SignUpForm({ action }: { action: Action }) {
 type County = { id: string; name: string; state: string };
 type Category = { code: string; label: string; description: string };
 
-export function ApplicationForm({ action, counties, categories }: { action: Action; counties: County[]; categories: Category[] }) {
+export function ApplicationForm({ action, counties, categories, defaultZip }: { action: Action; counties: County[]; categories: Category[]; defaultZip?: string }) {
   const [state, formAction] = useActionState(action, {});
   const sel = "input";
   return (
@@ -52,7 +52,7 @@ export function ApplicationForm({ action, counties, categories }: { action: Acti
           </select>
           <FieldError state={state} name="countyId" />
         </label>
-        <Field label="ZIP code" name="zip" state={state} required inputMode="numeric" pattern="[0-9]{5}" maxLength={5} autoComplete="postal-code"
+        <Field label="ZIP code" name="zip" state={state} required inputMode="numeric" pattern="[0-9]{5}" maxLength={5} autoComplete="postal-code" defaultValue={defaultZip}
           hint="If your ZIP code touches more than one county, choose the county where you live." />
       </div>
       <Field label="Short title" name="summary" state={state} required maxLength={140} hint="For example: Roof damage, no drinking water." />

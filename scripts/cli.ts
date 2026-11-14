@@ -201,6 +201,8 @@ async function main() {
     const db = await createDriver();
     await migrate(db);
     for (const line of await seedDemo(db)) console.log(line);
+    const { seedDemoLearning } = await import("./demo-learning");
+    for (const line of await seedDemoLearning(db)) console.log(line);
     await db.close();
   } else if (cmd === "zips") {
     await importZips(args[0]);

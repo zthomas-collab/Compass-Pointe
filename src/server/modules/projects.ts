@@ -535,7 +535,7 @@ export async function getProject(driver: Driver, userId: string, id: string): Pr
          FROM community_projects p JOIN counties c ON c.id = p.county_id WHERE p.id = $1`, [id]);
     if (!p.length) return null;
     const commitments = await tx.query<Record<string, unknown>>(
-      `SELECT k.*, n.label AS need_label, o.reference AS offer_reference, g.display_name AS org_name
+      `SELECT k.*, k.scheduled_for::text AS sched_text, n.label AS need_label, o.reference AS offer_reference, g.display_name AS org_name
          FROM project_commitments k JOIN project_needs n ON n.id = k.need_id
          LEFT JOIN contribution_offers o ON o.id = k.offer_id LEFT JOIN organizations g ON g.id = k.org_id
         WHERE k.project_id = $1 ORDER BY k.created_at`, [id]);
@@ -558,7 +558,7 @@ export async function getProject(driver: Driver, userId: string, id: string): Pr
       id: k.id as string, needId: k.need_id as string, needLabel: k.need_label as string, sourceLabel: k.source_label as string,
       offerReference: (k.offer_reference as string | null) ?? null, orgName: (k.org_name as string | null) ?? null, status: k.status as CommitmentStatus,
       offered: Number(k.qty_offered), accepted: Number(k.qty_accepted), dispatched: Number(k.qty_dispatched), received: Number(k.qty_received), verified: Number(k.qty_verified),
-      scheduledFor: k.scheduled_for ? String(k.scheduled_for).slice(0, 10) : null, receiverName: (k.receiver_name as string | null) ?? null, note: (k.note as string | null) ?? null,
+      scheduledFor: (k.sched_text as string | null) ?? null, receiverName: (k.receiver_name as string | null) ?? null, note: (k.note as string | null) ?? null,
     })),
     participants: d.participants.map((x) => ({ orgId: x.org_id, name: x.name })),
     updates: d.updates.map((u) => ({ id: u.id as string, body: u.body as string, isPublic: u.is_public as boolean, at: u.created_at as Date })),
@@ -589,7 +589,7 @@ export async function listPublicProjects(driver: Driver, filter: { zip?: string;
   const zip = filter.zip && /^\d{5}$/.test(filter.zip) ? filter.zip : null;
   return runIn(driver, { kind: "anon" }, async (tx) => {
     const r = await tx.query<Record<string, unknown>>(
-      `SELECT * FROM public_projects WHERE ($1::text IS NULL OR $1 = ANY (zips)) AND ($2::text IS NULL OR county_name = $2)
+      `SELECT id, reference, title, summary, county_name, state, category, priority, status, start_date::text AS start_date, target_date::text AS target_date, zips, needs FROM public_projects WHERE ($1::text IS NULL OR $1 = ANY (zips)) AND ($2::text IS NULL OR county_name = $2)
         ORDER BY (status = 'ACTIVE') DESC, array_position(ARRAY['CRITICAL','HIGH','NORMAL','LOW'], priority), reference DESC LIMIT 100`,
       [zip, filter.countyName ?? null]);
     return r.map(toPublic);
@@ -599,7 +599,7 @@ export async function listPublicProjects(driver: Driver, filter: { zip?: string;
 export async function getPublicProject(driver: Driver, reference: string): Promise<{ project: PublicProject; updates: { id: string; body: string; at: Date }[] } | null> {
   if (!/^PRJ-\d{4}-\d{6}$/.test(reference)) return null;
   return runIn(driver, { kind: "anon" }, async (tx) => {
-    const r = await tx.query<Record<string, unknown>>(`SELECT * FROM public_projects WHERE reference = $1`, [reference]);
+    const r = await tx.query<Record<string, unknown>>(`SELECT id, reference, title, summary, county_name, state, category, priority, status, start_date::text AS start_date, target_date::text AS target_date, zips, needs FROM public_projects WHERE reference = $1`, [reference]);
     if (!r.length) return null;
     const u = await tx.query<{ id: string; body: string; created_at: Date }>(`SELECT id, body, created_at FROM public_project_updates WHERE project_id = $1 ORDER BY created_at DESC LIMIT 50`, [r[0].id]);
     return { project: toPublic(r[0]), updates: u.map((x) => ({ id: x.id, body: x.body, at: x.created_at })) };
@@ -610,7 +610,7 @@ export async function getPublicProject(driver: Driver, reference: string): Promi
 export async function listMyCommitments(driver: Driver, userId: string): Promise<(CommitmentRow & { projectId: string; projectTitle: string; projectReference: string })[]> {
   return runIn(driver, { kind: "viewer", userId }, async (tx) => {
     const r = await tx.query<Record<string, unknown>>(
-      `SELECT k.*, n.label AS need_label, p.id AS pid, p.title AS ptitle, p.reference AS pref, g.display_name AS org_name
+      `SELECT k.*, k.scheduled_for::text AS sched_text, n.label AS need_label, p.id AS pid, p.title AS ptitle, p.reference AS pref, g.display_name AS org_name
          FROM project_commitments k JOIN project_needs n ON n.id = k.need_id JOIN community_projects p ON p.id = k.project_id
          JOIN organizations g ON g.id = k.org_id
         WHERE k.org_id = ANY (ics.viewer_approved_org_ids()) AND k.status NOT IN ('DECLINED','CANCELED') ORDER BY k.created_at DESC LIMIT 200`);
@@ -618,7 +618,7 @@ export async function listMyCommitments(driver: Driver, userId: string): Promise
       id: k.id as string, needId: k.need_id as string, needLabel: k.need_label as string, sourceLabel: k.source_label as string, offerReference: null,
       orgName: (k.org_name as string | null) ?? null, status: k.status as CommitmentStatus, offered: Number(k.qty_offered), accepted: Number(k.qty_accepted),
       dispatched: Number(k.qty_dispatched), received: Number(k.qty_received), verified: Number(k.qty_verified),
-      scheduledFor: k.scheduled_for ? String(k.scheduled_for).slice(0, 10) : null, receiverName: (k.receiver_name as string | null) ?? null, note: (k.note as string | null) ?? null,
+      scheduledFor: (k.sched_text as string | null) ?? null, receiverName: (k.receiver_name as string | null) ?? null, note: (k.note as string | null) ?? null,
       projectId: k.pid as string, projectTitle: k.ptitle as string, projectReference: k.pref as string,
     }));
   });

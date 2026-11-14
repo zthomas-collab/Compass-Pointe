@@ -458,16 +458,108 @@ export async function listPublicEvents(driver: Driver, filter: { zip?: string } 
   const zip = filter.zip && /^\d{5}$/.test(filter.zip) ? filter.zip : null;
   return runIn(driver, { kind: "anon" }, async (tx) => {
     const r = await tx.query<Record<string, unknown>>(
-      `SELECT * FROM public_events WHERE ($1::text IS NULL OR $1 = ANY (zips)) ORDER BY (status = 'ACTIVE') DESC, start_date LIMIT 100`, [zip]);
+      `SELECT id, reference, name, category, summary, county_name, state, start_date::text AS start_date, end_date::text AS end_date, status, zips FROM public_events WHERE ($1::text IS NULL OR $1 = ANY (zips)) ORDER BY (status = 'ACTIVE') DESC, start_date LIMIT 100`, [zip]);
     return r.map(toPublic);
   });
 }
 export async function getPublicEvent(driver: Driver, reference: string): Promise<{ event: PublicEvent; updates: { id: string; body: string; at: Date }[] } | null> {
   if (!/^EVT-\d{4}-\d{6}$/.test(reference)) return null;
   return runIn(driver, { kind: "anon" }, async (tx) => {
-    const r = await tx.query<Record<string, unknown>>(`SELECT * FROM public_events WHERE reference = $1`, [reference]);
+    const r = await tx.query<Record<string, unknown>>(`SELECT id, reference, name, category, summary, county_name, state, start_date::text AS start_date, end_date::text AS end_date, status, zips FROM public_events WHERE reference = $1`, [reference]);
     if (!r.length) return null;
     const u = await tx.query<{ id: string; body: string; created_at: Date }>(`SELECT id, body, created_at FROM public_event_updates WHERE event_id = $1 ORDER BY created_at DESC LIMIT 50`, [r[0].id]);
     return { event: toPublic(r[0]), updates: u.map((x) => ({ id: x.id, body: x.body, at: x.created_at })) };
+  });
+}
+
+// --------------------------- public event area: current needs and resources by ZIP ---------------------------
+export type AreaNeed = {
+  projectReference: string; projectTitle: string; priority: "LOW" | "NORMAL" | "HIGH" | "CRITICAL"; category: string;
+  label: string; unit: string; requested: number; verified: number; remaining: number; percent: number;
+};
+export type AreaResource = { id: string; name: string; category: string; status: string; freshness: string; quantity: number | null; unit: string | null; lastConfirmedAt: Date | null };
+export type AreaSite = {
+  id: string; name: string; orgName: string; serviceLabel: string | null; address: string | null; city: string | null; state: string | null;
+  phone: string | null; hours: string | null; lat: number; lng: number; resources: AreaResource[];
+};
+export type PublicEventArea = {
+  zips: string[];
+  needsByZip: { zip: string; needs: AreaNeed[]; metCount: number }[];
+  resourcesByZip: { zip: string; sites: AreaSite[] }[];
+  totals: { openNeeds: number; sites: number; resources: number };
+};
+
+/**
+ * What a visitor needs to act on one public event: the current unmet needs of its published projects and the publicly listed
+ * resource sites, both grouped by ZIP code. Built only from the public read models (published projects, public sites and
+ * resources), so nothing private, no people and no internal tasks can appear. Pass `zip` to narrow to one ZIP of the event.
+ */
+export async function getPublicEventArea(driver: Driver, reference: string, filter: { zip?: string } = {}): Promise<PublicEventArea | null> {
+  if (!/^EVT-\d{4}-\d{6}$/.test(reference)) return null;
+  return runIn(driver, { kind: "anon" }, async (tx) => {
+    const ev = await tx.query<{ id: string; zips: string[] }>(`SELECT id, zips FROM public_events WHERE reference = $1`, [reference]);
+    if (!ev.length) return null;
+    const allZips = ev[0].zips;
+    const zips = filter.zip && /^\d{5}$/.test(filter.zip) && allZips.includes(filter.zip) ? [filter.zip] : allZips;
+
+    const projects = await tx.query<Record<string, unknown>>(
+      `SELECT reference, title, priority, category, zips, needs FROM public_projects WHERE event_id = $1 AND status IN ('ACTIVE','COMPLETED')
+        ORDER BY array_position(ARRAY['CRITICAL','HIGH','NORMAL','LOW'], priority), reference`, [ev[0].id]);
+    const needsByZip = new Map<string, { needs: AreaNeed[]; metCount: number }>(zips.map((z) => [z, { needs: [], metCount: 0 }]));
+    for (const p of projects) {
+      const pzips = p.zips as string[];
+      const here = pzips.filter((z) => needsByZip.has(z));
+      // A project with no ZIP in the event's list is shown under every ZIP of the event rather than being hidden.
+      const targets = here.length ? here : pzips.length === 0 || allZips.every((z) => !pzips.includes(z)) ? zips : [];
+      for (const n of p.needs as { label: string; unit: string; requested: number | string; verified: number | string }[]) {
+        const requested = Number(n.requested);
+        const verified = Number(n.verified);
+        for (const z of targets) {
+          const slot = needsByZip.get(z)!;
+          if (verified >= requested) { slot.metCount += 1; continue; }
+          slot.needs.push({
+            projectReference: p.reference as string, projectTitle: p.title as string, priority: p.priority as AreaNeed["priority"], category: p.category as string,
+            label: n.label, unit: n.unit, requested, verified, remaining: requested - verified, percent: Math.min(100, Math.round((verified / requested) * 100)),
+          });
+        }
+      }
+    }
+
+    const sites = await tx.query<Record<string, unknown>>(
+      `SELECT id, name, org_name, service_label, address_line, city, state, left(postal_code, 5) AS zip, public_phone, hours_text, lat, lng
+         FROM public_sites WHERE left(postal_code, 5) = ANY($1::text[]) ORDER BY name`, [zips]);
+    const ids = sites.map((s) => s.id as string);
+    const resources = ids.length
+      ? await tx.query<Record<string, unknown>>(
+          `SELECT id, site_id, name, category_label, reported_status, freshness, reported_quantity, quantity_unit, last_confirmed_at FROM public_resources WHERE site_id = ANY($1::uuid[]) ORDER BY name`, [ids])
+      : [];
+    const bySite = new Map<string, AreaResource[]>();
+    for (const r of resources) {
+      const list = bySite.get(r.site_id as string) ?? [];
+      list.push({
+        id: r.id as string, name: r.name as string, category: r.category_label as string, status: r.reported_status as string, freshness: r.freshness as string,
+        quantity: r.reported_quantity === null || r.reported_quantity === undefined ? null : Number(r.reported_quantity), unit: (r.quantity_unit as string | null) ?? null,
+        lastConfirmedAt: (r.last_confirmed_at as Date | null) ?? null,
+      });
+      bySite.set(r.site_id as string, list);
+    }
+    const resourcesByZip = zips.map((zip) => ({
+      zip,
+      sites: sites.filter((s) => s.zip === zip).map((s): AreaSite => ({
+        id: s.id as string, name: s.name as string, orgName: s.org_name as string, serviceLabel: (s.service_label as string | null) ?? null,
+        address: (s.address_line as string | null) ?? null, city: (s.city as string | null) ?? null, state: (s.state as string | null) ?? null,
+        phone: (s.public_phone as string | null) ?? null, hours: (s.hours_text as string | null) ?? null, lat: Number(s.lat), lng: Number(s.lng), resources: bySite.get(s.id as string) ?? [],
+      })),
+    }));
+    return {
+      zips: allZips,
+      needsByZip: zips.map((zip) => ({ zip, ...needsByZip.get(zip)! })),
+      resourcesByZip,
+      totals: {
+        openNeeds: [...needsByZip.values()].reduce((a, v) => a + v.needs.length, 0),
+        sites: sites.length,
+        resources: resources.length,
+      },
+    };
   });
 }

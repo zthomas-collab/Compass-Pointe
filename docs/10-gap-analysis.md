@@ -98,3 +98,13 @@ Still open: executive settings page (destination email), volunteer/donation inta
 Still open: provider (nonprofit) accept/decline UI for referred assistance requests, routing-rule admin UI, `/learn` (YouTube only, with moderation), data retention job, projects on the public map, browser-based accessibility pass, UI-level automated tests.
 
 **Nonprofit referral screens and routing-rule admin:** done. Providers have `/dashboard/referrals` (queue) and provider-specific actions on the request page (accept, mark completed, or return to the county with a required reason; the county's administrators are emailed and the applicant is not). County administrators and executives manage rules at `/admin/routing`. 4 new tests; the provider-return rule is covered. Still open: `/learn`, retention job, projects on the public map, accessibility pass, UI-level tests.
+
+**Learning library and public event area:**
+
+| Item | State |
+|---|---|
+| `/learn` (migration 0015): YouTube-only video (the id is stored, never the URL or markup), plain-text articles, executive moderation with required rejection reasons, organization submission/edit/resubmit, public view of published items only, CSP allows only the youtube-nocookie player in a sandboxed frame | Done, 10 tests. PDF guides and an approved-external-links list are **not built**; the external-links list needs a host-approval policy decision. |
+| Public event pages open into "Needs and resources in this area" (migration 0016 adds `event_id` to the public project view): current unmet needs and publicly listed resource sites grouped by ZIP, filterable between needs and resources and by ZIP, with donate/volunteer (pre-filled ZIP, type and project), request-help (pre-filled ZIP), call and directions links | Done, 6 tests. Built only from published projects and public site/resource views. |
+| Fixes found while verifying in a browser: link text colors were overridden by a global rule (moved into the base layer); public dates were rendered as "Mon Nov 09" (now plain `YYYY-MM-DD` text, with a regression test) | Done |
+
+Still open: data retention job, projects on the public map, browser-based accessibility pass, UI-level automated tests, PDF guides and approved external links for `/learn`.

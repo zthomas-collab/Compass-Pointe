@@ -7,7 +7,7 @@ import { Field, FieldError, FormMessage, SubmitButton } from "./forms";
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
 type County = { id: string; name: string; state: string };
 
-export function OfferForm({ action, counties, types }: { action: Action; counties: County[]; types: { code: string; label: string }[] }) {
+export function OfferForm({ action, counties, types, defaultZip, defaultType, defaultProject }: { action: Action; counties: County[]; types: { code: string; label: string }[]; defaultZip?: string; defaultType?: string; defaultProject?: string }) {
   const [state, formAction] = useActionState(action, {});
   return (
     <form action={formAction} className="grid gap-4">
@@ -18,7 +18,7 @@ export function OfferForm({ action, counties, types }: { action: Action; countie
       </div>
       <label className="field">
         <span>What can you offer?</span>
-        <select className="input" name="contributionType" required defaultValue="">
+        <select className="input" name="contributionType" required defaultValue={defaultType ?? ""}>
           <option value="" disabled>Choose one</option>
           {types.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
         </select>
@@ -45,7 +45,7 @@ export function OfferForm({ action, counties, types }: { action: Action; countie
       <fieldset className="grid gap-4 rounded-lg border border-line p-3">
         <legend className="px-1 text-sm font-semibold">Where are you?</legend>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="ZIP code" name="zip" state={state} required inputMode="numeric" pattern="[0-9]{5}" maxLength={5} autoComplete="postal-code" />
+          <Field label="ZIP code" name="zip" state={state} required inputMode="numeric" pattern="[0-9]{5}" maxLength={5} autoComplete="postal-code" defaultValue={defaultZip} />
           <label className="field">
             <span>County (optional)</span>
             <select className="input" name="countyId" defaultValue="">
@@ -64,7 +64,7 @@ export function OfferForm({ action, counties, types }: { action: Action; countie
           <Field label="Email" name="email" type="email" state={state} required autoComplete="email" />
           <Field label="Phone (optional)" name="phone" type="tel" state={state} autoComplete="tel" />
         </div>
-        <Field label="Project you would like to support (optional)" name="preferredProject" state={state} maxLength={140} />
+        <Field label="Project you would like to support (optional)" name="preferredProject" state={state} maxLength={140} defaultValue={defaultProject} />
       </fieldset>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" name="consentContact" className="mt-1 h-5 w-5" required />

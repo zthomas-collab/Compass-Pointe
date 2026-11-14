@@ -25,6 +25,7 @@ export default async function PublicEvents({ searchParams }: { searchParams: Pro
             <div className="mt-1 flex flex-wrap items-center gap-2 text-sm"><EventStatusBadge status={e.status} /><span>{EVENT_CATEGORY_LABELS[e.category]}</span>
               <span className="text-muted">{e.countyName} County · ZIP {e.zips.join(", ")} · {e.startDate}{e.endDate ? ` to ${e.endDate}` : ""}</span></div>
             <p className="mt-2 text-sm">{e.summary}</p>
+            <p className="mt-2"><Link className="btn btn-secondary min-h-9 px-3 py-1 text-sm" href={`/events/${e.reference}#area`}>See needs and resources in this area</Link></p>
           </article>
         ))}
       </section>
