@@ -42,6 +42,10 @@ export default async function AdminHome() {
           <p className="mt-1 text-sm text-muted">ZIP-level needs, matches, commitments and verified deliveries.</p>
         </li>
         <li className="card p-4">
+          <Link className="text-lg font-semibold text-brand underline" href="/admin/routing">Routing rules</Link>
+          <p className="mt-1 text-sm text-muted">Choose which approved organization is suggested for each county, ZIP code and type of help.</p>
+        </li>
+        <li className="card p-4">
           <Link className="text-lg font-semibold text-brand underline" href="/admin/offers">Volunteer &amp; donation offers</Link>
           <p className="mt-1 text-sm text-muted">Review, match and track offers of help for your counties.</p>
         </li>

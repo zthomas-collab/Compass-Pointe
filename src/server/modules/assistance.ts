@@ -475,6 +475,11 @@ export async function transitionApplication(driver: Driver, userId: string, raw:
       if (!cap) throw new AppError("NOT_FOUND", "Application not found.");
       await assertPiiMfa(tx, userId);
       if (!transitionAllowedFor(cap, a[0].status, input.to)) throw new AppError("CONFLICT", "That status change is not allowed from the current state.");
+      // A provider that cannot help sends the application back to the county, and must say why.
+      const returnedByProvider = cap.kind === "provider" && input.to === "APPROVED";
+      if (returnedByProvider && (!input.note || input.note.length < 5)) {
+        throw new AppError("VALIDATION", "Tell the county why you cannot help with this application.", { note: ["Required"] });
+      }
 
       let referOrg: string | null = null;
       if (input.to === "REFERRED") {
@@ -493,7 +498,23 @@ export async function transitionApplication(driver: Driver, userId: string, raw:
       );
       await writeAudit(tx, { actorUserId: userId, action: `APPLICATION_${input.to}`, subjectType: "assistance_application", subjectId: input.applicationId,
         details: { from: a[0].status, as: role } });
-      await notifyApplicant(
+      if (returnedByProvider) {
+        // No applicant email: the county decides what happens next. Tell the county's administrators there is work waiting.
+        const admins = await tx.query<{ email: string }>(
+          `SELECT DISTINCT u.email FROM county_admin_assignments ca JOIN users u ON u.id = ca.user_id
+            WHERE ca.county_id = $1 AND ca.revoked_at IS NULL AND (ca.expires_at IS NULL OR ca.expires_at > now()) AND u.status = 'ACTIVE'`,
+          [a[0].county_id],
+        );
+        for (const adm of admins) {
+          await enqueueEmail(tx, {
+            kind: "APPLICATION_RETURNED",
+            to: adm.email,
+            subject: `${brandName()}: a provider returned an application`,
+            body: `A resource provider could not take an application and sent it back for reassignment.\n\nReview it: ${appBaseUrl()}/admin/applications/${input.applicationId}`,
+          });
+        }
+      }
+      if (!returnedByProvider) await notifyApplicant(
         tx, input.applicationId, a[0].applicant,
         input.to === "REFERRED"
           ? "Your application was approved and shared with a resource provider who can help."

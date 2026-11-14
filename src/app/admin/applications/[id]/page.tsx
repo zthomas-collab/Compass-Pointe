@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { NoteForm, TransitionForm } from "@/components/assistance-forms";
+import { ProviderActionForm } from "@/components/referral-forms";
 import { ApplicationStatusBadge, Timeline } from "@/components/assistance-ui";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
@@ -77,8 +78,12 @@ export default async function StaffApplication({ params }: { params: Promise<{ i
           <section className="card p-4" aria-labelledby="move">
             <h2 id="move" className="text-xl">Update status</h2>
             <div className="mt-3">
-              <TransitionForm action={transitionAction} applicationId={a.id} options={a.allowedNext}
-                suggestedOrgId={isAdmin ? a.suggestedOrgId : null} labels={STATUS_LABELS} />
+              {isAdmin ? (
+                <TransitionForm action={transitionAction} applicationId={a.id} options={a.allowedNext}
+                  suggestedOrgId={a.suggestedOrgId} labels={STATUS_LABELS} />
+              ) : (
+                <ProviderActionForm action={transitionAction} applicationId={a.id} options={a.allowedNext} />
+              )}
             </div>
           </section>
           <section className="card p-4" aria-labelledby="note">

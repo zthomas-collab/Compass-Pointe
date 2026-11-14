@@ -162,9 +162,12 @@ export async function seedDemo(db: Driver): Promise<string[]> {
   await transitionApplication(db, countyAdmin, { applicationId: a2, to: "INFO_REQUIRED", note: "Please tell us whether anyone in the home has a medical need for water.", visibleToApplicant: "on" });
   await transitionApplication(db, countyAdmin, { applicationId: a3, to: "UNDER_REVIEW" });
   await transitionApplication(db, countyAdmin, { applicationId: a3, to: "APPROVED", note: "Approved for referral.", visibleToApplicant: "on" });
-  void a1;
-  log.push("Three assistance applications (new, info requested, approved) from the demo resident");
+  // The housing request is approved and referred to the case-management provider chosen by the routing rule above.
+  await transitionApplication(db, countyAdmin, { applicationId: a1, to: "UNDER_REVIEW" });
+  await transitionApplication(db, countyAdmin, { applicationId: a1, to: "APPROVED", note: "Approved for referral.", visibleToApplicant: "on" });
+  await transitionApplication(db, countyAdmin, { applicationId: a1, to: "REFERRED" });
+  log.push("Three assistance applications (referred to a provider, info requested, approved) from the demo resident");
 
-  log.push("", "Sign in at /signin with:", `  ${DEMO_ADMIN}  (executive + county + nonprofit views)`, `  ${DEMO_COUNTY_ADMIN}  (county-scoped view)`, `  ${DEMO_RESIDENT}  (resident view)`, "The sign-in link appears at /dev/outbox.");
+  log.push("", "Sign in at /signin with:", `  ${DEMO_ADMIN}  (executive + county + nonprofit views)`, `  ${DEMO_COUNTY_ADMIN}  (county-scoped view)`, `  ${DEMO_RESIDENT}  (resident view)`, "  relief.editor@example.invalid  (nonprofit provider: referred requests, from the synthetic seed)", "The sign-in link appears at /dev/outbox.");
   return log;
 }

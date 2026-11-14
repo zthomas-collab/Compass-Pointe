@@ -96,3 +96,5 @@ Still open: executive settings page (destination email), volunteer/donation inta
 | Local demo accounts and sample data (`npm run demo:seed`, `scripts/demo.ts`) | Done; local only |
 
 Still open: provider (nonprofit) accept/decline UI for referred assistance requests, routing-rule admin UI, `/learn` (YouTube only, with moderation), data retention job, projects on the public map, browser-based accessibility pass, UI-level automated tests.
+
+**Nonprofit referral screens and routing-rule admin:** done. Providers have `/dashboard/referrals` (queue) and provider-specific actions on the request page (accept, mark completed, or return to the county with a required reason; the county's administrators are emailed and the applicant is not). County administrators and executives manage rules at `/admin/routing`. 4 new tests; the provider-return rule is covered. Still open: `/learn`, retention job, projects on the public map, accessibility pass, UI-level tests.
