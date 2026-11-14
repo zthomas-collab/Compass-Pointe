@@ -41,6 +41,12 @@ export default async function AdminHome() {
           <Link className="text-lg font-semibold text-brand underline" href="/admin/projects">Community projects</Link>
           <p className="mt-1 text-sm text-muted">ZIP-level needs, matches, commitments and verified deliveries.</p>
         </li>
+        {executive && (
+          <li className="card p-4">
+            <Link className="text-lg font-semibold text-brand underline" href="/admin/learning">Learning library</Link>
+            <p className="mt-1 text-sm text-muted">Review YouTube videos and articles submitted by organizations, or publish your own.</p>
+          </li>
+        )}
         <li className="card p-4">
           <Link className="text-lg font-semibold text-brand underline" href="/admin/routing">Routing rules</Link>
           <p className="mt-1 text-sm text-muted">Choose which approved organization is suggested for each county, ZIP code and type of help.</p>
