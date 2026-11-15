@@ -59,14 +59,15 @@ Public
 ├── /events                   ✅ Events: open disaster areas, closed archive
 ├── /events/:slug             ✅ Event: area, help available there (Needs: placeholder until projects exist)
 ├── /projects                 ✅ Volunteer projects: search by text, ZIP + radius, county
-├── /projects/:id             ✅ Project: volunteer roles and shifts (sign-up: coming)
+├── /projects/:id             ✅ Project: volunteer roles, shifts, real spots left, and sign-up (no account)
+├── /volunteer/commitments    ✅ Private emailed link: confirm or cancel a sign-up; confirmed volunteers see where to go
 └── /black-book               ↪ redirects to /contacts
 
 Authenticated
 ├── /dashboard                ✅ Organization Dashboard + My Staging Locations
 ├── /dashboard/orgs/:id/sites/new  ✅ New staging site
 ├── /dashboard/orgs/:id/projects   ✅ My organization's projects
-├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete
+├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete; volunteer roster and attendance
 ├── /dashboard/sites/:id      ✅ Site detail: inventory, Update Availability, history
 ├── /dashboard/roads/new      ⏳ Submit Road Report
 ├── /dashboard/orgs/:id/profile ✅ My Organization Profile (public contacts, office ZIP, services, Contacts consent)

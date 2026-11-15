@@ -82,6 +82,14 @@ describe("notification worker", () => {
     expect((await job("note@example.org")).body_text).toBe("Your organization was approved.");
   });
 
+  it("redacts a volunteer confirmation link after sending, while the transport received it", async () => {
+    await enqueue("volunteer@example.org", "VOLUNTEER_CONFIRM", "Confirm here: https://app.example/volunteer/commitments?token=VOLUNTEERSECRET");
+    const t = new FakeTransport();
+    await processNotificationJobs(db, t);
+    expect(t.sent.find((m) => m.to === "volunteer@example.org")!.text).toContain("VOLUNTEERSECRET");
+    expect((await job("volunteer@example.org")).body_text).toBe("[redacted after sending]");
+  });
+
   it("backs off after a failure, hides credentials in the stored error, and ends as DEAD", async () => {
     await enqueue("bad@example.org");
     const t = new FakeTransport();
@@ -101,6 +109,20 @@ describe("notification worker", () => {
     j = await job("bad@example.org");
     expect(j).toMatchObject({ status: "DEAD", attempts: MAX_ATTEMPTS });
     expect((await queueStats(db)).dead).toBe(1);
+  });
+
+  it("redacts a secret-link message that ends DEAD, but keeps an ordinary one", async () => {
+    await enqueue("dead-link@example.org", "VOLUNTEER_CONFIRM", "Confirm here: https://app.example/volunteer/commitments?token=DEADSECRET");
+    await enqueue("dead-note@example.org", "ORG_APPROVED", "Your organization was approved.");
+    const t = new FakeTransport();
+    t.failFor.add("dead-link@example.org");
+    t.failFor.add("dead-note@example.org");
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await runIn(db, { kind: "system" }, (tx) => tx.query(`UPDATE notification_jobs SET run_after = now() - interval '1 second' WHERE recipient_email IN ('dead-link@example.org','dead-note@example.org')`));
+      await processNotificationJobs(db, t);
+    }
+    expect(await job("dead-link@example.org")).toMatchObject({ status: "DEAD", body_text: "[redacted after sending]" });
+    expect(await job("dead-note@example.org")).toMatchObject({ status: "DEAD", body_text: "Your organization was approved." });
   });
 
   it("a crashed worker's claimed job is picked up again after the claim expires", async () => {

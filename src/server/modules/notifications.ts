@@ -13,7 +13,7 @@ import type { EmailTransport } from "../email";
 export const MAX_ATTEMPTS = 5;
 const CLAIM_MINUTES = 10;
 /** Kinds whose body contains a credential-like link. */
-const SECRET_KINDS = ["SIGN_IN", "EMAIL_CONFIRM", "INVITE"];
+const SECRET_KINDS = ["SIGN_IN", "EMAIL_CONFIRM", "INVITE", "VOLUNTEER_CONFIRM"];
 
 export type DrainResult = { claimed: number; sent: number; failed: number; dead: number };
 
@@ -54,10 +54,12 @@ export async function processNotificationJobs(driver: Driver, transport: EmailTr
       const safe = (err as Error).message.replace(/[\r\n]+/g, " ").replace(/\/\/[^@\s]*@/g, "//***@").slice(0, 200);
       await runIn(driver, { kind: "system" }, (tx) =>
         tx.query(
+          // A message that will never be sent must not keep a working private link in the database.
           `UPDATE notification_jobs SET status = $2, last_error = $3,
-                  run_after = now() + make_interval(mins => $4)
+                  run_after = now() + make_interval(mins => $4),
+                  body_text = CASE WHEN $2 = 'DEAD' AND kind = ANY($5::text[]) THEN '[redacted after sending]' ELSE body_text END
             WHERE id = $1`,
-          [job.id, dead ? "DEAD" : "FAILED", safe, 2 ** job.attempts],
+          [job.id, dead ? "DEAD" : "FAILED", safe, 2 ** job.attempts, SECRET_KINDS],
         ),
       );
       if (dead) result.dead++;

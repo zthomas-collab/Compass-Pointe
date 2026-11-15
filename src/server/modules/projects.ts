@@ -7,6 +7,7 @@ import { canManageCounty, loadAccess } from "./access";
 import { DEFAULT_RADIUS_MILES, RADIUS_OPTIONS_MILES, membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
+import { TAKEN_SQL, noticeProjectCancelled } from "./volunteers";
 
 export type NeedRow = {
   id: string;
@@ -282,6 +283,29 @@ async function projectOfNeed(tx: Tx, needId: string): Promise<string> {
   return rows[0].project_id;
 }
 
+/**
+ * Volunteers may already be counting on a need. Slots cannot drop below the number taken, and the shift time cannot
+ * move while anyone is signed up. Takes the need lock (the project lock is already held; sign-ups lock only the need).
+ */
+async function assertNeedChangeAllowed(tx: Tx, needId: string, input: z.infer<typeof needSchema>): Promise<void> {
+  const cur = await tx.query<{ starts_at: Date | null; ends_at: Date | null }>(
+    `SELECT starts_at, ends_at FROM project_needs WHERE id = $1 FOR UPDATE`,
+    [needId],
+  );
+  const taken = (
+    await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM volunteer_commitments WHERE need_id = $1 AND ${TAKEN_SQL}`, [needId])
+  )[0].n;
+  const fail = (field: string, msg: string) => new AppError("VALIDATION", msg, { [field]: [msg] });
+  if (input.slotsNeeded < taken) {
+    throw fail("slotsNeeded", `${taken} volunteers have already signed up for this role, so it needs at least ${taken} slots.`);
+  }
+  const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
+  const moved = iso(cur[0].starts_at) !== (input.startsAt ?? null) || iso(cur[0].ends_at) !== (input.endsAt ?? null);
+  if (moved && taken > 0) {
+    throw fail("startsAt", "Volunteers have signed up for this shift. Cancel their sign-ups before changing its time.");
+  }
+}
+
 /** Org editor: replace a need's details. An OPEN or PAUSED project goes back to PENDING_REVIEW. */
 export async function updateNeed(driver: Driver, userId: string, needId: string, raw: unknown): Promise<void> {
   const id = uuid(needId);
@@ -290,6 +314,7 @@ export async function updateNeed(driver: Driver, userId: string, needId: string,
     await runIn(driver, { kind: "system" }, async (tx) => {
       const projectId = await projectOfNeed(tx, id);
       const p = await lockEditableProject(tx, userId, projectId);
+      await assertNeedChangeAllowed(tx, id, input);
       await tx.query(
         `UPDATE project_needs SET title = $2, details = $3, urgency = $4, slots_needed = $5, starts_at = $6::timestamptz,
                 ends_at = $7::timestamptz, skills = $8, instructions = $9 WHERE id = $1`,
@@ -313,6 +338,11 @@ export async function removeNeed(driver: Driver, userId: string, needId: string)
     await runIn(driver, { kind: "system" }, async (tx) => {
       const projectId = await projectOfNeed(tx, id);
       const p = await lockEditableProject(tx, userId, projectId);
+      await tx.query(`SELECT 1 FROM project_needs WHERE id = $1 FOR UPDATE`, [id]);
+      const history = await tx.query(`SELECT 1 FROM volunteer_commitments WHERE need_id = $1 LIMIT 1`, [id]);
+      if (history.length) {
+        throw new AppError("VALIDATION", "This role has volunteer sign-ups on record, so it cannot be removed. Cancel the sign-ups and mark the project completed instead.");
+      }
       await tx.query(`DELETE FROM project_needs WHERE id = $1`, [id]);
       await tx.query(`UPDATE projects SET ${REVIEW_RESET} WHERE id = $1`, [projectId]);
       await writeAudit(tx, {
@@ -420,6 +450,8 @@ export async function setProjectStatus(driver: Driver, userId: string, id: strin
         throw new AppError("VALIDATION", `A project cannot move from ${p.status} to ${target}.`);
       }
       await tx.query(`UPDATE projects SET status = $2 WHERE id = $1`, [projectId, target]);
+      // People who were counting on this project are told it is off (pausing or completing does not cancel anyone).
+      if (target === "CANCELLED") await noticeProjectCancelled(tx, projectId);
       await writeAudit(tx, {
         actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_STATUS_CHANGED", subjectType: "project", subjectId: projectId,
         details: { from: p.status, to: target },
@@ -452,6 +484,9 @@ export type PublicNeed = {
   details: string | null;
   urgency: "NORMAL" | "URGENT";
   slotsNeeded: number;
+  /** Real count of confirmed, attended, and unexpired-pending sign-ups. */
+  slotsTaken: number;
+  spotsLeft: number;
   startsAt: string | null;
   endsAt: string | null;
   skills: string | null;
@@ -468,6 +503,8 @@ export type PublicProject = {
   zip: string;
   audience: string;
   totalSlots: number;
+  /** Sum of the needs' spots left. */
+  spotsLeft: number;
   hasUrgent: boolean;
   needs: PublicNeed[];
   distanceMiles: number | null;
@@ -494,7 +531,7 @@ export const projectSearchSchema = z.object({
 });
 
 const METERS_PER_MILE = 1609.344;
-const likePattern = (q: string) => `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
+const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 type DbPublicProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
@@ -502,11 +539,12 @@ type DbPublicProject = {
 };
 type DbPublicNeed = {
   id: string; project_id: string; title: string; details: string | null; urgency: "NORMAL" | "URGENT"; slots_needed: number;
-  starts_at: Date | null; ends_at: Date | null; skills: string | null;
+  slots_taken: number; starts_at: Date | null; ends_at: Date | null; skills: string | null;
 };
 
 const toPublicNeed = (n: DbPublicNeed): PublicNeed => ({
   id: n.id, title: n.title, details: n.details, urgency: n.urgency, slotsNeeded: n.slots_needed,
+  slotsTaken: n.slots_taken, spotsLeft: Math.max(0, n.slots_needed - n.slots_taken),
   startsAt: n.starts_at ? new Date(n.starts_at).toISOString() : null,
   endsAt: n.ends_at ? new Date(n.ends_at).toISOString() : null,
   skills: n.skills,
@@ -516,7 +554,7 @@ async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, Pu
   const out = new Map<string, PublicNeed[]>();
   if (!projectIds.length) return out;
   const rows = await tx.query<DbPublicNeed>(
-    `SELECT id, project_id, title, details, urgency, slots_needed, starts_at, ends_at, skills
+    `SELECT id, project_id, title, details, urgency, slots_needed, slots_taken, starts_at, ends_at, skills
        FROM public_project_needs WHERE project_id = ANY($1::uuid[]) ORDER BY starts_at NULLS LAST, title, id`,
     [projectIds],
   );
@@ -526,7 +564,7 @@ async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, Pu
 
 const toPublicProject = (p: DbPublicProject, needs: PublicNeed[]): PublicProject => ({
   id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyName: p.county_name,
-  state: p.state, zip: p.zip, audience: p.audience, totalSlots: p.total_slots, hasUrgent: p.has_urgent, needs,
+  state: p.state, zip: p.zip, audience: p.audience, totalSlots: p.total_slots, spotsLeft: needs.reduce((sum, n) => sum + n.spotsLeft, 0), hasUrgent: p.has_urgent, needs,
   distanceMiles: p.dist_m === null || p.dist_m === undefined ? null : Math.round((Number(p.dist_m) / METERS_PER_MILE) * 10) / 10,
 });
 
