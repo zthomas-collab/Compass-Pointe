@@ -42,9 +42,9 @@ ALTER TABLE event_zips ENABLE ROW LEVEL SECURITY;
 CREATE VIEW public_events AS
 SELECT e.id, e.name, e.slug, e.hazard_type, e.status, e.summary,
        e.starts_on::text AS starts_on, e.closed_on::text AS closed_on,
-       coalesce((SELECT array_agg(c.name || ', ' || c.state ORDER BY c.state, c.name)
+       coalesce((SELECT jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name, 'state', c.state) ORDER BY c.state, c.name)
                    FROM event_counties ec JOIN counties c ON c.id = ec.county_id
-                  WHERE ec.event_id = e.id), '{}') AS counties,
+                  WHERE ec.event_id = e.id), '[]'::jsonb) AS counties,
        coalesce((SELECT array_agg(z.zip ORDER BY z.zip) FROM event_zips z WHERE z.event_id = e.id), '{}') AS zips
   FROM events e
  WHERE e.status <> 'DRAFT';

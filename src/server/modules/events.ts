@@ -228,3 +228,72 @@ export async function setEventStatus(driver: Driver, actorId: string, id: string
     throw fromDbError(err);
   }
 }
+
+const PUBLIC_EVENT_SELECT = `
+  SELECT id, name, slug, hazard_type, status, summary, starts_on, closed_on, counties, zips FROM public_events`;
+
+/** Public: open events first (newest start first), then the closed archive (most recently closed first). */
+export async function listPublicEvents(driver: Driver): Promise<EventRow[]> {
+  const rows = await runIn(driver, { kind: "anon" }, (tx) =>
+    tx.query<DbEvent>(
+      `${PUBLIC_EVENT_SELECT}
+        ORDER BY (status = 'CLOSED'), CASE WHEN status = 'CLOSED' THEN NULL ELSE starts_on END DESC, closed_on DESC, name`,
+    ),
+  );
+  return rows.map(toEventRow);
+}
+
+/** Public: null for an unknown slug or a DRAFT (the view never returns drafts). */
+export async function getPublicEvent(driver: Driver, slug: string): Promise<EventRow | null> {
+  const rows = await runIn(driver, { kind: "anon" }, (tx) => tx.query<DbEvent>(`${PUBLIC_EVENT_SELECT} WHERE slug = $1`, [slug]));
+  return rows[0] ? toEventRow(rows[0]) : null;
+}
+
+export type EventHelpSite = {
+  siteId: string;
+  siteName: string;
+  orgName: string;
+  city: string | null;
+  postalCode: string | null;
+  hoursText: string | null;
+  resources: { name: string; categoryLabel: string; reportedStatus: string; freshness: string }[];
+};
+
+type DbHelpSite = {
+  site_id: string; site_name: string; org_name: string; city: string | null; postal_code: string | null; hours_text: string | null;
+  resources: { name: string; categoryLabel: string; reportedStatus: string; freshness: string }[];
+};
+
+/** Strip a trailing " County" and compare case-insensitively: site county text is free-form. */
+const norm = (col: string) => `lower(btrim(regexp_replace(${col}, '[[:space:]]+county$', '', 'i')))`;
+
+/**
+ * Public: sites that serve an event's area. With ZIPs set, a site matches on its ZIP; otherwise on county
+ * (same state, name tolerant of a "County" suffix). Reads only public views, so private data cannot leak,
+ * and a DRAFT event (absent from public_events) yields nothing.
+ */
+export async function getEventHelp(driver: Driver, eventId: string): Promise<EventHelpSite[]> {
+  if (!z.string().uuid().safeParse(eventId).success) return [];
+  const rows = await runIn(driver, { kind: "anon" }, (tx) =>
+    tx.query<DbHelpSite>(
+      `SELECT ps.id AS site_id, ps.name AS site_name, ps.org_name, ps.city, ps.postal_code, ps.hours_text,
+              coalesce((SELECT json_agg(json_build_object('name', r.name, 'categoryLabel', r.category_label,
+                                                          'reportedStatus', r.reported_status, 'freshness', r.freshness) ORDER BY r.name)
+                          FROM public_resources r WHERE r.site_id = ps.id), '[]'::json) AS resources
+         FROM public_events pe
+         JOIN public_sites ps ON (
+              CASE WHEN cardinality(pe.zips) > 0
+                   THEN ps.postal_code = ANY (pe.zips)
+                   ELSE EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c
+                                 WHERE c->>'state' = ps.state AND ${norm("c->>'name'")} = ${norm("ps.county")})
+              END)
+        WHERE pe.id = $1
+        ORDER BY ps.name, ps.id`,
+      [eventId],
+    ),
+  );
+  return rows.map((r) => ({
+    siteId: r.site_id, siteName: r.site_name, orgName: r.org_name, city: r.city, postalCode: r.postal_code,
+    hoursText: r.hours_text, resources: r.resources,
+  }));
+}

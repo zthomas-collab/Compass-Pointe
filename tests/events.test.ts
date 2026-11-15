@@ -3,9 +3,12 @@ import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { AppError } from "@/server/errors";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
-import { createEvent, getEventAdmin, listEventsAdmin, setEventStatus, slugify, updateEvent } from "@/server/modules/events";
+import {
+  createEvent, getEventAdmin, getEventHelp, getPublicEvent, listEventsAdmin, listPublicEvents, setEventStatus, slugify, updateEvent,
+} from "@/server/modules/events";
+import { createResource, createSite } from "@/server/modules/sites";
 import { freshDb } from "./helpers/db";
-import { grantRole, makeUser } from "./helpers/fixtures";
+import { grantRole, makeOrg, makeUser, site } from "./helpers/fixtures";
 
 let db: Driver;
 let exec: string;
@@ -135,5 +138,89 @@ describe("event status and edits", () => {
       await expect(updateEvent(db, who, id, base())).rejects.toMatchObject({ code: "FORBIDDEN" });
       await expect(setEventStatus(db, who, id, "RECOVERY")).rejects.toMatchObject({ code: "FORBIDDEN" });
     }
+  });
+});
+
+describe("public events", () => {
+  it("lists public events with active ones first and never drafts", async () => {
+    const mk = async (name: string, startsOn: string, to: ("ACTIVE" | "RECOVERY" | "CLOSED")[]) => {
+      const id = await createEvent(db, exec, base({ name, startsOn }));
+      for (const s of to) await setEventStatus(db, exec, id, s);
+      return id;
+    };
+    await mk("Pub Closed Old", "2026-01-05", ["ACTIVE", "CLOSED"]);
+    await mk("Pub Active Newer", "2026-10-01", ["ACTIVE"]);
+    await mk("Pub Recovery Older", "2026-09-01", ["ACTIVE", "RECOVERY"]);
+    await createEvent(db, exec, base({ name: "Pub Hidden Draft" }));
+    const names = (await listPublicEvents(db)).map((e) => e.name).filter((n) => n.startsWith("Pub "));
+    expect(names).toEqual(["Pub Active Newer", "Pub Recovery Older", "Pub Closed Old"]);
+  });
+
+  it("returns null from getPublicEvent for a draft and for an unknown slug", async () => {
+    expect(await getPublicEvent(db, "pub-hidden-draft")).toBeNull();
+    expect(await getPublicEvent(db, "no-such-event")).toBeNull();
+    expect(await getPublicEvent(db, "PUB-ACTIVE-NEWER")).toBeNull();
+    expect(await getPublicEvent(db, "pub-active-newer")).toMatchObject({ name: "Pub Active Newer", status: "ACTIVE" });
+  });
+
+  it("keeps a closed event public", async () => {
+    expect(await getPublicEvent(db, "pub-closed-old")).toMatchObject({ status: "CLOSED", closedOn: expect.any(String) });
+  });
+});
+
+describe("event help list", () => {
+  let editor: string;
+  let activeEvent: string;
+  let zipEvent: string;
+  let draftEvent: string;
+  const helpNames = async (id: string) => (await getEventHelp(db, id)).map((h) => h.siteName).sort();
+
+  beforeAll(async () => {
+    editor = await makeUser(db, "help-editor@example.test");
+    const org = await makeOrg(db, { name: "Help Org", members: [{ userId: editor, role: "EDITOR" }] });
+    const add = (name: string, over: Record<string, unknown>) => createSite(db, editor, org, site({ name: `[TEST] ${name}`, ...over }));
+    const water = await add("Help A", { county: "Buncombe", postalCode: "28801" });
+    await add("Help B", { county: "buncombe county", postalCode: "28804" });
+    await add("Help C", { county: "Buncombe County", postalCode: "28806" });
+    await add("Help Wrong State", { county: "Buncombe", state: "SC", postalCode: "29601" });
+    await add("Help Other County", { county: "Madison", postalCode: "28753" });
+    await add("Help Private", { county: "Buncombe", postalCode: "28801", visibility: "PRIVATE_ORGANIZATION" });
+    const susp = await makeOrg(db, { name: "Suspended Help Org", members: [{ userId: editor, role: "EDITOR" }] });
+    await createSite(db, editor, susp, site({ name: "[TEST] Help Suspended", county: "Buncombe", postalCode: "28801" }));
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = true WHERE id = $1`, [susp]));
+    await createResource(db, editor, water, { categoryCode: "WATER", name: "Bottled water", visibility: "PUBLIC", availabilityStatus: "AVAILABLE" });
+
+    activeEvent = await createEvent(db, exec, base({ name: "Help Area Event", countyIds: [buncombe] }));
+    await setEventStatus(db, exec, activeEvent, "ACTIVE");
+    zipEvent = await createEvent(db, exec, base({ name: "Help Zip Event", countyIds: [buncombe], zips: ["28801"] }));
+    await setEventStatus(db, exec, zipEvent, "ACTIVE");
+    draftEvent = await createEvent(db, exec, base({ name: "Help Draft Event", countyIds: [buncombe] }));
+  });
+
+  it("matches help sites by county, tolerating a 'County' suffix and casing", async () => {
+    expect(await helpNames(activeEvent)).toEqual(["[TEST] Help A", "[TEST] Help B", "[TEST] Help C"]);
+  });
+
+  it("narrows help to the event's ZIPs when ZIPs are set", async () => {
+    expect(await helpNames(zipEvent)).toEqual(["[TEST] Help A"]);
+  });
+
+  it("excludes private sites and sites of suspended organizations", async () => {
+    const names = await helpNames(activeEvent);
+    expect(names).not.toContain("[TEST] Help Private");
+    expect(names).not.toContain("[TEST] Help Suspended");
+  });
+
+  it("returns nothing for a draft event", async () => {
+    expect(await getEventHelp(db, draftEvent)).toEqual([]);
+  });
+
+  it("returns each site's resources with status and freshness", async () => {
+    const a = (await getEventHelp(db, activeEvent)).find((h) => h.siteName === "[TEST] Help A")!;
+    expect(a.orgName).toContain("Help Org");
+    expect(a.resources).toHaveLength(1);
+    expect(a.resources[0]).toMatchObject({ name: "Bottled water", reportedStatus: "AVAILABLE" });
+    expect(a.resources[0].categoryLabel).toBeTruthy();
+    expect(a.resources[0].freshness).toBeTruthy();
   });
 });
