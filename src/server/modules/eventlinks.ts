@@ -3,6 +3,7 @@ import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
 import type { EventStatus } from "./events";
+import { publicNeeds, toPublicProject, type DbPublicProject, type PublicProject } from "./projects";
 import { canManageCounty, loadAccess } from "./access";
 import { membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
@@ -206,4 +207,46 @@ export async function listLinkableEvents(driver: Driver, userId: string, project
       [projectId, role],
     );
   });
+}
+
+/**
+ * Public: the volunteer projects attached to an event, for an event that is open (ACTIVE or RECOVERY); [] for an
+ * unknown, draft or closed event. Reads only the public views, which re-check every condition now. Projects with an
+ * urgent need come first, then the one whose next shift is soonest, then by title.
+ */
+export async function listEventProjects(driver: Driver, eventId: string): Promise<PublicProject[]> {
+  if (!z.string().uuid().safeParse(eventId).success) return [];
+  return runIn(driver, { kind: "anon" }, async (tx) => {
+    const open = await tx.query(`SELECT 1 FROM public_events WHERE id = $1 AND status IN ('ACTIVE','RECOVERY')`, [eventId]);
+    if (!open.length) return [];
+    const rows = await tx.query<DbPublicProject>(
+      `SELECT p.id, p.org_id, p.org_name, p.title, p.description, p.county_name, p.state, p.zip, p.audience, p.total_slots, p.has_urgent
+         FROM public_event_links l JOIN public_projects p ON p.id = l.project_id
+        WHERE l.event_id = $1
+        ORDER BY p.has_urgent DESC,
+                 (SELECT min(n.starts_at) FROM public_project_needs n
+                   WHERE n.project_id = p.id AND (n.ends_at IS NULL OR n.ends_at > now())) NULLS LAST,
+                 p.title, p.id`,
+      [eventId],
+    );
+    const needs = await publicNeeds(tx, rows.map((r) => r.id));
+    return rows.map((r) => toPublicProject(r, needs.get(r.id) ?? []));
+  });
+}
+
+/** Public: the non-draft events a publicly visible project is attached to (closed ones included); [] otherwise. */
+export async function listPublicProjectEvents(
+  driver: Driver,
+  projectId: string,
+): Promise<{ id: string; name: string; slug: string; status: EventStatus }[]> {
+  if (!z.string().uuid().safeParse(projectId).success) return [];
+  return runIn(driver, { kind: "anon" }, (tx) =>
+    tx.query<{ id: string; name: string; slug: string; status: EventStatus }>(
+      `SELECT e.id, e.name, e.slug, e.status
+         FROM public_event_links l JOIN public_events e ON e.id = l.event_id
+        WHERE l.project_id = $1
+        ORDER BY e.starts_on DESC, e.name, e.id`,
+      [projectId],
+    ),
+  );
 }

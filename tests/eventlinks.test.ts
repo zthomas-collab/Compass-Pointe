@@ -2,9 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
-import { createEvent, setEventStatus } from "@/server/modules/events";
-import { linkProjectToEvent, listLinkableEvents, listProjectEventLinks, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
-import { addNeed, createProject, reviewProject, setProjectStatus, submitProject } from "@/server/modules/projects";
+import { createEvent, setEventStatus, updateEvent } from "@/server/modules/events";
+import { confirmCommitment, signUpForNeed } from "@/server/modules/volunteers";
+import { linkProjectToEvent, listEventProjects, listLinkableEvents, listProjectEventLinks, listPublicProjectEvents, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
+import { addNeed, createProject, reviewProject, setProjectStatus, submitProject, updateProject } from "@/server/modules/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
 
@@ -262,5 +263,151 @@ describe("editor reads", () => {
     expect(await ids(u.caB)).toContain(ev.second);
     const done = await project("COMPLETED");
     expect(await listLinkableEvents(db, u.admin, done)).toEqual([]);
+  });
+});
+
+describe("public event needs", () => {
+  const PRIVATE_NOTES = "Meet at the gravel lot behind the church";
+  const INSTRUCTIONS = "SECRET-INSTRUCTIONS-park-on-elm";
+  const future = (hours: number) => new Date(Date.now() + hours * 3600_000).toISOString();
+  let n = 0;
+
+  /** An OPEN project of orgA with one need, optionally linked to an event. */
+  async function open(title: string, o: { eventId?: string; zip?: string; urgent?: boolean; startsInHours?: number; slots?: number } = {}) {
+    const id = await createProject(db, u.admin, orgA, {
+      title, description: "Volunteers help clear flood damage from homes in the neighborhood.",
+      countyId: buncombe, zip: o.zip ?? "28801", audience: "COMMUNITY", privateLocationNotes: PRIVATE_NOTES,
+    });
+    const needId = await addNeed(db, u.admin, id, {
+      title: `${title} crew`, slotsNeeded: o.slots ?? 3, urgency: o.urgent ? "URGENT" : "NORMAL",
+      startsAt: future(o.startsInHours ?? 48), endsAt: future((o.startsInHours ?? 48) + 4), instructions: INSTRUCTIONS,
+    });
+    await submitProject(db, u.admin, id);
+    await reviewProject(db, exec, id, { decision: "APPROVE", note: "Approved for volunteers" });
+    if (o.eventId) await linkProjectToEvent(db, u.admin, id, o.eventId);
+    return { id, needId };
+  }
+  const titles = async (eventId: string) => (await listEventProjects(db, eventId)).map((p) => p.title);
+  const volunteer = async (needId: string, name: string, email: string) => {
+    await signUpForNeed(db, { needId, name, email, consentShare: true });
+    const mail = await sys((tx) => tx.query<{ body_text: string }>(`SELECT body_text FROM notification_jobs WHERE recipient_email = $1 AND kind = 'VOLUNTEER_CONFIRM'`, [email]));
+    await confirmCommitment(db, /token=([A-Za-z0-9_-]+)/.exec(mail[0].body_text)![1]);
+  };
+
+  it("lists open, approved projects linked to an active event, with real spots left and no private fields", async () => {
+    const e = await event(`Needs event ${++n}`, [buncombe]);
+    const p = await open("Needs live project", { eventId: e, slots: 3 });
+    const before = (await listEventProjects(db, e))[0];
+    expect(before).toMatchObject({ id: p.id, title: "Needs live project", countyName: "Buncombe", state: "NC", spotsLeft: 3, totalSlots: 3 });
+    expect(before.needs).toMatchObject([{ title: "Needs live project crew", slotsNeeded: 3, spotsLeft: 3 }]);
+    await volunteer(p.needId, "Quentin Confirmed", "quentin-needs@example.test");
+    const after = await listEventProjects(db, e);
+    expect(after[0].spotsLeft).toBe(2);
+    expect(after[0].needs[0]).toMatchObject({ slotsTaken: 1, spotsLeft: 2 });
+    const everything = JSON.stringify(after);
+    for (const secret of [PRIVATE_NOTES, INSTRUCTIONS, "Quentin", "quentin-needs"]) expect(everything).not.toContain(secret);
+  });
+
+  it("leaves out drafts, pending, paused and completed projects, suspended orgs, and dismissed links", async () => {
+    const e = await event(`Needs event ${++n}`, [buncombe]);
+    const live = await open("Filter live project", { eventId: e });
+    const mk = (title: string) => project("DRAFT", { title });
+    const draft = await mk("Filter draft project");
+    const pending = await project("PENDING_REVIEW", { title: "Filter pending project" });
+    const paused = await open("Filter paused project", { eventId: e });
+    await setProjectStatus(db, u.admin, paused.id, "PAUSED");
+    const done = await open("Filter completed project", { eventId: e });
+    await setProjectStatus(db, u.admin, done.id, "COMPLETED");
+    const dismissed = await open("Filter dismissed project", { eventId: e });
+    await unlinkProjectFromEvent(db, u.admin, dismissed.id, e);
+    for (const id of [draft, pending]) await linkProjectToEvent(db, u.admin, id, e);
+    expect(await titles(e)).toEqual(["Filter live project"]);
+
+    // Everything that was hidden for a reason that can be undone comes back when it is.
+    await setProjectStatus(db, u.admin, paused.id, "OPEN");
+    await linkProjectToEvent(db, u.admin, dismissed.id, e);
+    expect((await titles(e)).sort()).toEqual(["Filter dismissed project", "Filter live project", "Filter paused project"]);
+
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = true WHERE id = $1`, [orgA]));
+    try {
+      expect(await titles(e)).toEqual([]);
+    } finally {
+      await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = false WHERE id = $1`, [orgA]));
+    }
+    expect(await titles(e)).toContain("Filter live project");
+    expect(live.id).toBeTruthy();
+  });
+
+  it("drops a project the moment it is outside the event's area", async () => {
+    const narrow = await event(`Needs event ${++n}`, [buncombe], { zips: ["28801"] });
+    const p = await open("Area zip project", { eventId: narrow, zip: "28801" });
+    expect(await titles(narrow)).toEqual(["Area zip project"]);
+    // The project moves to another ZIP and is re-approved: it is no longer inside the event, with no change to the link row.
+    await updateProject(db, u.admin, p.id, {
+      title: "Area zip project", description: "Volunteers help clear flood damage from homes in the neighborhood.",
+      countyId: buncombe, zip: "28806", audience: "COMMUNITY",
+    });
+    await reviewProject(db, exec, p.id, { decision: "APPROVE", note: "Approved after moving" });
+    expect(await titles(narrow)).toEqual([]);
+    expect((await linkRow(p.id, narrow)).state).toBe("CONFIRMED");
+
+    const wide = await event(`Needs event ${++n}`, [buncombe]);
+    const q = await open("Area county project", { eventId: wide });
+    expect(await titles(wide)).toEqual(["Area county project"]);
+    const edit = (countyIds: string[]) => updateEvent(db, exec, wide, { name: `Needs event ${n}`, hazardType: "FLOOD", startsOn: "2026-09-10", countyIds });
+    await edit([henderson]);
+    expect(await titles(wide)).toEqual([]);
+    await edit([buncombe]);
+    expect(await titles(wide)).toEqual(["Area county project"]);
+    expect(q.id).toBeTruthy();
+  });
+
+  it("returns nothing for a draft or closed event, and keeps the links when an event closes", async () => {
+    const e = await event(`Needs event ${++n}`, [buncombe]);
+    const p = await open("Closing project", { eventId: e });
+    expect(await titles(e)).toEqual(["Closing project"]);
+    await setEventStatus(db, exec, e, "CLOSED");
+    expect(await listEventProjects(db, e)).toEqual([]);
+    expect((await linkRow(p.id, e)).state).toBe("CONFIRMED");
+    expect(await listEventProjects(db, ev.draft)).toEqual([]);
+    expect(await listEventProjects(db, "00000000-0000-0000-0000-000000000000")).toEqual([]);
+    expect(await listEventProjects(db, "not-a-uuid")).toEqual([]);
+  });
+
+  it("orders urgent projects first, then the soonest shift, then title", async () => {
+    const e = await event(`Needs event ${++n}`, [buncombe]);
+    await open("Order C later", { eventId: e, startsInHours: 96 });
+    await open("Order B sooner", { eventId: e, startsInHours: 24 });
+    await open("Order A urgent", { eventId: e, startsInHours: 200, urgent: true });
+    expect(await titles(e)).toEqual(["Order A urgent", "Order B sooner", "Order C later"]);
+  });
+
+  it("lists a project's public events and never a draft event", async () => {
+    const a = await event(`Needs event ${++n}`, [buncombe]);
+    const r = await event(`Needs event ${++n}`, [buncombe], { to: ["ACTIVE", "RECOVERY"] });
+    const c = await event(`Needs event ${++n}`, [buncombe]);
+    const p = await open("Multi event project", { eventId: a });
+    await linkProjectToEvent(db, u.admin, p.id, r);
+    await linkProjectToEvent(db, u.admin, p.id, c);
+    await setEventStatus(db, exec, c, "CLOSED");
+    // A link to a draft event cannot be made through the service; force one to prove the view itself hides it.
+    await sys((tx) =>
+      tx.query(
+        `INSERT INTO project_event_links (project_id, event_id, state, decided_by, decided_by_role, decided_at) VALUES ($1, $2, 'CONFIRMED', $3, 'ADMIN', now())`,
+        [p.id, ev.draft, exec],
+      ),
+    );
+    const events = await listPublicProjectEvents(db, p.id);
+    expect(events.map((x) => x.id).sort()).toEqual([a, r, c].sort());
+    expect(events.find((x) => x.id === r)).toMatchObject({ status: "RECOVERY", slug: expect.any(String), name: expect.any(String) });
+    const unlisted = await project("DRAFT", { title: "Hidden multi event project" });
+    await linkProjectToEvent(db, u.admin, unlisted, a);
+    expect(await listPublicProjectEvents(db, unlisted)).toEqual([]);
+    expect(await listPublicProjectEvents(db, "not-a-uuid")).toEqual([]);
+  });
+
+  it("exposes only ids in the public view", async () => {
+    const cols = await sys((tx) => tx.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name = 'public_event_links' ORDER BY column_name`));
+    expect(cols.map((c) => c.column_name)).toEqual(["event_id", "project_id"]);
   });
 });
