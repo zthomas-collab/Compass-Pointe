@@ -3,7 +3,7 @@ import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
 import { createEvent, setEventStatus } from "@/server/modules/events";
-import { linkProjectToEvent, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
+import { linkProjectToEvent, listLinkableEvents, listProjectEventLinks, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
 import { addNeed, createProject, reviewProject, setProjectStatus, submitProject } from "@/server/modules/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
@@ -200,5 +200,67 @@ describe("linking and unlinking", () => {
 
   it("hides links from request roles at the database", async () => {
     await expect(runIn(db, { kind: "anon" }, (tx) => tx.query(`SELECT * FROM project_event_links`))).rejects.toMatchObject({ code: "42501" });
+  });
+});
+
+describe("editor reads", () => {
+  it("lists a project's links with area, status, and what the reader may do", async () => {
+    const p = await project();
+    await linkProjectToEvent(db, u.editor, p, ev.buncombe);
+    await linkProjectToEvent(db, u.editor, p, ev.second);
+    await linkProjectToEvent(db, u.editor, p, ev.recovery);
+    await unlinkProjectFromEvent(db, u.caB, p, ev.second);
+    const as = async (who: string) => Object.fromEntries((await listProjectEventLinks(db, who, p)).map((l) => [l.eventId, l]));
+    const editor = await as(u.editor);
+    expect(Object.keys(editor).sort()).toEqual([ev.buncombe, ev.second, ev.recovery].sort());
+    expect(editor[ev.buncombe]).toMatchObject({ eventName: "Flood Buncombe", eventSlug: expect.any(String), eventStatus: "ACTIVE", state: "CONFIRMED", inArea: true, canUnlink: true, canRelink: false });
+    expect(editor[ev.recovery]).toMatchObject({ eventStatus: "RECOVERY", state: "CONFIRMED", canUnlink: true });
+    // The administrator removed this one: the organization may not restore it, the administrator may.
+    expect(editor[ev.second]).toMatchObject({ state: "DISMISSED", canUnlink: false, canRelink: false });
+    expect((await as(u.caB))[ev.second]).toMatchObject({ state: "DISMISSED", canRelink: true });
+    // A viewer can read but never change anything.
+    const viewer = await as(u.viewer);
+    expect(Object.values(viewer).every((l) => !l.canUnlink && !l.canRelink)).toBe(true);
+    expect(Object.keys(viewer)).toHaveLength(3);
+  });
+
+  it("flags a link whose project has moved outside the event area", async () => {
+    const p = await project("DRAFT", { zip: "28801" });
+    await linkProjectToEvent(db, u.admin, p, ev.zip28801);
+    await linkProjectToEvent(db, u.admin, p, ev.buncombe);
+    await sys((tx) => tx.query(`UPDATE projects SET zip = '28806' WHERE id = $1`, [p]));
+    const links = Object.fromEntries((await listProjectEventLinks(db, u.admin, p)).map((l) => [l.eventId, l]));
+    expect(links[ev.zip28801].inArea).toBe(false);
+    expect(links[ev.buncombe].inArea).toBe(true);
+  });
+
+  it("shows nothing to people who cannot see the project", async () => {
+    const p = await project();
+    await linkProjectToEvent(db, u.admin, p, ev.buncombe);
+    for (const who of [u.other, u.caH, u.plain]) {
+      expect(await listProjectEventLinks(db, who, p)).toEqual([]);
+      expect(await listLinkableEvents(db, who, p)).toEqual([]);
+    }
+    expect(await listProjectEventLinks(db, u.admin, "not-a-uuid")).toEqual([]);
+    expect(await listProjectEventLinks(db, u.admin, "00000000-0000-0000-0000-000000000000")).toEqual([]);
+  });
+
+  it("offers only events the project can actually be linked to", async () => {
+    const p = await project("DRAFT", { zip: "28801" });
+    const ids = async (who: string) => (await listLinkableEvents(db, who, p)).map((e) => e.id);
+    const offered = await ids(u.editor);
+    for (const e of [ev.buncombe, ev.second, ev.recovery, ev.zip28801]) expect(offered).toContain(e);
+    for (const e of [ev.draft, ev.closed, ev.buncombeSC, ev.henderson]) expect(offered).not.toContain(e);
+    await linkProjectToEvent(db, u.editor, p, ev.buncombe);
+    expect(await ids(u.editor)).not.toContain(ev.buncombe);
+    expect(await ids(u.viewer)).toEqual([]);
+    expect((await ids(u.caB)).length).toBeGreaterThan(0);
+    // An event an administrator removed the project from is not offered to the organization, but is to the administrator.
+    await linkProjectToEvent(db, u.caB, p, ev.second);
+    await unlinkProjectFromEvent(db, u.caB, p, ev.second);
+    expect(await ids(u.editor)).not.toContain(ev.second);
+    expect(await ids(u.caB)).toContain(ev.second);
+    const done = await project("COMPLETED");
+    expect(await listLinkableEvents(db, u.admin, done)).toEqual([]);
   });
 });

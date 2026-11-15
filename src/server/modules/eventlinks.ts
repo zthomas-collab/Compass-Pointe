@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
+import type { EventStatus } from "./events";
 import { canManageCounty, loadAccess } from "./access";
 import { membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
@@ -120,4 +121,89 @@ export async function unlinkProjectFromEvent(driver: Driver, userId: string, pro
   } catch (err) {
     throw fromDbError(err);
   }
+}
+
+export type ProjectEventLink = {
+  eventId: string;
+  eventName: string;
+  eventSlug: string;
+  eventStatus: EventStatus;
+  state: "CONFIRMED" | "DISMISSED";
+  /** Is the project inside the event's area right now? (Editing a project or an event can move it out.) */
+  inArea: boolean;
+  /** The reader may take a confirmed link off. */
+  canUnlink: boolean;
+  /** The reader may put a dismissed link back, and it would succeed. */
+  canRelink: boolean;
+};
+
+type ReadableProject = { org_id: string; county_id: string; status: string; org_ok: boolean };
+
+/** Same audience as getProjectForEditor: members of the owning org, administrators of the project's county, executives. */
+async function readableProject(tx: Tx, userId: string, projectId: string): Promise<ReadableProject | null> {
+  const rows = await tx.query<ReadableProject>(
+    `SELECT p.org_id, p.county_id, p.status, (o.status = 'APPROVED' AND NOT o.publication_suspended) AS org_ok
+       FROM projects p JOIN organizations o ON o.id = p.org_id WHERE p.id = $1`,
+    [projectId],
+  );
+  if (!rows.length) return null;
+  const member = await membershipRole(tx, rows[0].org_id, userId);
+  const access = await loadAccess(tx, userId);
+  return member || canManageCounty(access, rows[0].county_id) ? rows[0] : null;
+}
+
+const finished = (status: string) => status === "COMPLETED" || status === "CANCELLED";
+
+/** The project's attached and removed events, for the people who may see the project; [] for anyone else. */
+export async function listProjectEventLinks(driver: Driver, userId: string, projectId: string): Promise<ProjectEventLink[]> {
+  if (!z.string().uuid().safeParse(projectId).success) return [];
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    const p = await readableProject(tx, userId, projectId);
+    if (!p) return [];
+    const role = await decisionRole(tx, userId, p);
+    const rows = await tx.query<{ event_id: string; name: string; slug: string; status: EventStatus; state: "CONFIRMED" | "DISMISSED"; decided_by_role: string | null }>(
+      `SELECT l.event_id, e.name, e.slug, e.status, l.state, l.decided_by_role
+         FROM project_event_links l JOIN events e ON e.id = l.event_id
+        WHERE l.project_id = $1 AND l.state IN ('CONFIRMED','DISMISSED')
+        ORDER BY e.starts_on DESC, e.name, e.id`,
+      [projectId],
+    );
+    const out: ProjectEventLink[] = [];
+    for (const r of rows) {
+      const open = r.status === "ACTIVE" || r.status === "RECOVERY";
+      out.push({
+        eventId: r.event_id, eventName: r.name, eventSlug: r.slug, eventStatus: r.status, state: r.state,
+        inArea: await projectInEventArea(tx, projectId, r.event_id),
+        canUnlink: r.state === "CONFIRMED" && role !== null,
+        canRelink: r.state === "DISMISSED" && role !== null && open && !finished(p.status) && (r.decided_by_role !== "ADMIN" || role === "ADMIN"),
+      });
+    }
+    return out;
+  });
+}
+
+export type LinkableEvent = { id: string; name: string; slug: string; status: EventStatus };
+
+/** Events this reader could attach the project to right now; [] for anyone who may not decide or for a finished project. */
+export async function listLinkableEvents(driver: Driver, userId: string, projectId: string): Promise<LinkableEvent[]> {
+  if (!z.string().uuid().safeParse(projectId).success) return [];
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    const p = await readableProject(tx, userId, projectId);
+    if (!p || finished(p.status)) return [];
+    const role = await decisionRole(tx, userId, p);
+    if (!role) return [];
+    return tx.query<LinkableEvent>(
+      `SELECT e.id, e.name, e.slug, e.status
+         FROM events e JOIN projects p ON p.id = $1
+        WHERE e.status IN ('ACTIVE','RECOVERY')
+          AND CASE WHEN EXISTS (SELECT 1 FROM event_zips z WHERE z.event_id = e.id)
+                   THEN EXISTS (SELECT 1 FROM event_zips z WHERE z.event_id = e.id AND z.zip = p.zip)
+                   ELSE EXISTS (SELECT 1 FROM event_counties ec WHERE ec.event_id = e.id AND ec.county_id = p.county_id) END
+          AND NOT EXISTS (SELECT 1 FROM project_event_links l
+                           WHERE l.project_id = p.id AND l.event_id = e.id
+                             AND (l.state = 'CONFIRMED' OR (l.state = 'DISMISSED' AND l.decided_by_role = 'ADMIN' AND $2 = 'ORG')))
+        ORDER BY e.starts_on DESC, e.name, e.id`,
+      [projectId, role],
+    );
+  });
 }
