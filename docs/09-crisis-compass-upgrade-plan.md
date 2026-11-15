@@ -71,13 +71,13 @@ Rules that are enforced and tested: authorization is re-derived from the databas
 |---|---|
 | 2 | `assistance_applications`, `assistance_application_events` (append-only), `assistance_documents`, `assistance_categories`, `application_routing_rules`, `notifications` |
 | 3 | `volunteer_profiles`, `contribution_offers`, `platform_email_settings` (destination address kept in settings, never hard-coded), `community_projects`, `project_resource_needs`, `project_commitments`, `project_updates` |
-| 4 | `events`, `event_tasks`, `event_assignments`, `video_resources`, `video_categories`; report queries and views |
+| 4 | `video_resources`, `video_categories`; report queries and views. (`events` shipped early in 0013 as disaster areas; the `event_tasks`/`event_assignments` board was superseded, see `docs/superpowers/specs/2026-11-15-events-and-projects-design.md`.) |
 
 ## 6. Pages, routes and APIs
 
 **Phase 1 (built):** `/admin` (landing), `/admin/counties`, `/admin/profiles`, `/orgs/[orgId]` (public profile), `/api/orgs/[orgId]/logo`, `/manifest.webmanifest` (now generated from brand config). Modified: `/dashboard/orgs/[orgId]/profile` (links, counties, logo), `/contacts` (links to profiles), root layout (brand, theme injection).
 
-**Later:** Phase 2 `/assistance/*`, `/dashboard/applications`, `/admin/applications`. Phase 3 `/volunteer`, `/offers`, `/projects/*`, `/admin/projects`, `/admin/settings`. Phase 4 `/learn`, `/admin/events`, `/admin/reports`, `/admin/videos`.
+**Later:** Phase 2 `/assistance/*`, `/dashboard/applications`, `/admin/applications`. Phase 3 `/volunteer`, `/offers`, `/projects/*`, `/admin/projects`, `/admin/settings`. Phase 4 `/learn`, `/admin/reports`, `/admin/videos`. `/events` and `/admin/events` are built (events as disaster areas).
 
 ## 7. Phases, dependencies and risks
 

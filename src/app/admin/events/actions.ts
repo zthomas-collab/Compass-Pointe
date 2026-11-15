@@ -1,0 +1,60 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { getDriver } from "@/server/db";
+import { AppError } from "@/server/errors";
+import { createEvent, setEventStatus, updateEvent, type EventStatus } from "@/server/modules/events";
+import { requireUser } from "@/server/session";
+import type { FormState } from "@/app/auth/actions";
+
+function toState(err: unknown): FormState {
+  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
+  console.error(JSON.stringify({ level: "error", action: "events", message: (err as Error).message }));
+  return { error: "Something went wrong. Please try again." };
+}
+
+/** Checkboxes post several values under one name; Object.fromEntries would keep only the last. */
+const eventFields = (form: FormData) => ({ ...Object.fromEntries(form.entries()), countyIds: form.getAll("countyIds") });
+
+function refresh(slug?: string) {
+  revalidatePath("/admin/events");
+  revalidatePath("/events");
+  if (slug) revalidatePath(`/events/${slug}`);
+}
+
+export async function createEventAction(_prev: FormState, form: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let id: string;
+  try {
+    id = await createEvent(await getDriver(), user.id, eventFields(form));
+  } catch (err) {
+    return toState(err);
+  }
+  refresh();
+  redirect(`/admin/events/${id}?created=1`);
+}
+
+export async function updateEventAction(id: string, _prev: FormState, form: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await updateEvent(await getDriver(), user.id, id, eventFields(form));
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(String(form.get("slug") ?? ""));
+  return { ok: true, message: "Event saved." };
+}
+
+/** Bound as (id, to) and used as a form action; the extra (prev, form) arguments React passes are ignored. */
+export async function setEventStatusAction(id: string, to: EventStatus): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await setEventStatus(await getDriver(), user.id, id, to);
+  } catch (err) {
+    return toState(err);
+  }
+  refresh();
+  revalidatePath(`/admin/events/${id}`);
+  return { ok: true, message: "Status updated." };
+}

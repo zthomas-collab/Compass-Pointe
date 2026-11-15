@@ -56,6 +56,8 @@ Public
 ├── /roads                    ⏳ Road Conditions
 ├── /directory                ⏳ Nonprofit Directory (merged into Contacts for now)
 ├── /contacts                 ✅ Contacts (the spec's public Black Book) — name/description/type/ZIP + radius search
+├── /events                   ✅ Events: open disaster areas, closed archive
+├── /events/:slug             ✅ Event: area, help available there (Needs: placeholder until projects exist)
 └── /black-book               ↪ redirects to /contacts
 
 Authenticated
@@ -70,6 +72,7 @@ Authenticated
 
 Administrative
 ├── /admin/organizations      ✅ Organizations Awaiting Approval (+ suspend/reinstate)
+├── /admin/events             ✅ Events: create, edit, activate, recover, close (executives)
 ├── /admin/moderation         ⏳ Resource Moderation
 ├── /admin/publication        ⏳ Map Publication Controls (active-ops toggle)
 ├── /admin/roads              ⏳ Road Report Review
