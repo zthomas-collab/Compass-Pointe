@@ -43,6 +43,12 @@ export default async function AdminHome() {
           <Link className="text-lg font-semibold text-brand underline" href="/admin/profiles">Organization profiles</Link>
           <p className="mt-1 text-sm text-muted">Approve or hide public profiles, logos and links.</p>
         </li>
+        {executive && (
+          <li className="card p-4">
+            <Link className="text-lg font-semibold text-brand underline" href="/admin/events">Events</Link>
+            <p className="mt-1 text-sm text-muted">Open, run and close disaster areas that the public can follow.</p>
+          </li>
+        )}
         <li className="card p-4">
           <Link className="text-lg font-semibold text-brand underline" href="/admin/counties">Counties and administrators</Link>
           <p className="mt-1 text-sm text-muted">{executive ? "Add counties and assign county administrators." : "See who administers your counties."}</p>

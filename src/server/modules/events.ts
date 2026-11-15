@@ -6,7 +6,8 @@ import { assertExecutive } from "./access";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
 
-export const HAZARD_TYPES = ["HURRICANE", "FLOOD", "WILDFIRE", "TORNADO", "WINTER_STORM", "EARTHQUAKE", "OTHER"] as const;
+import { HAZARD_TYPES } from "@/lib/events";
+export { HAZARD_TYPES };
 export type EventStatus = "DRAFT" | "ACTIVE" | "RECOVERY" | "CLOSED";
 
 export type EventRow = {
