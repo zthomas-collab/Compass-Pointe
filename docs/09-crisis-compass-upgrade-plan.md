@@ -70,7 +70,7 @@ Rules that are enforced and tested: authorization is re-derived from the databas
 | Phase | Tables |
 |---|---|
 | 2 | `assistance_applications`, `assistance_application_events` (append-only), `assistance_documents`, `assistance_categories`, `application_routing_rules`, `notifications` |
-| 3 | `volunteer_profiles`, `volunteer_commitments` + `volunteer_commitment_events` (shipped in `0015`: no-account sign-up with a 24-hour hold), `contribution_offers`, `platform_email_settings` (destination address kept in settings, never hard-coded), `projects`, `project_needs` (shipped in `0014` as people needs; goods needs follow in stage 6), `project_commitments`, `project_updates` |
+| 3 | `volunteer_profiles`, `volunteer_commitments` + `volunteer_commitment_events` (shipped in `0015`: no-account sign-up with a 24-hour hold), `project_event_links` (shipped in `0016`: which projects belong to which event; confirmed links are re-checked against the event area at read time), `contribution_offers`, `platform_email_settings` (destination address kept in settings, never hard-coded), `projects`, `project_needs` (shipped in `0014` as people needs; goods needs follow in stage 6), `project_commitments`, `project_updates` |
 | 4 | `video_resources`, `video_categories`; report queries and views. (`events` shipped early in 0013 as disaster areas; the `event_tasks`/`event_assignments` board was superseded, see `docs/superpowers/specs/2026-11-15-events-and-projects-design.md`.) |
 
 ## 6. Pages, routes and APIs

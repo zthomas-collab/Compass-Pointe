@@ -533,7 +533,7 @@ export const projectSearchSchema = z.object({
 const METERS_PER_MILE = 1609.344;
 const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
-type DbPublicProject = {
+export type DbPublicProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
   audience: string; total_slots: number; has_urgent: boolean; dist_m?: number | null;
 };
@@ -550,7 +550,7 @@ const toPublicNeed = (n: DbPublicNeed): PublicNeed => ({
   skills: n.skills,
 });
 
-async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, PublicNeed[]>> {
+export async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, PublicNeed[]>> {
   const out = new Map<string, PublicNeed[]>();
   if (!projectIds.length) return out;
   const rows = await tx.query<DbPublicNeed>(
@@ -562,7 +562,7 @@ async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, Pu
   return out;
 }
 
-const toPublicProject = (p: DbPublicProject, needs: PublicNeed[]): PublicProject => ({
+export const toPublicProject = (p: DbPublicProject, needs: PublicNeed[]): PublicProject => ({
   id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyName: p.county_name,
   state: p.state, zip: p.zip, audience: p.audience, totalSlots: p.total_slots, spotsLeft: needs.reduce((sum, n) => sum + n.spotsLeft, 0), hasUrgent: p.has_urgent, needs,
   distanceMiles: p.dist_m === null || p.dist_m === undefined ? null : Math.round((Number(p.dist_m) / METERS_PER_MILE) * 10) / 10,
