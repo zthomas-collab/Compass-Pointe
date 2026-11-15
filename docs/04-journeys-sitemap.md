@@ -58,11 +58,15 @@ Public
 ├── /contacts                 ✅ Contacts (the spec's public Black Book) — name/description/type/ZIP + radius search
 ├── /events                   ✅ Events: open disaster areas, closed archive
 ├── /events/:slug             ✅ Event: area, help available there (Needs: placeholder until projects exist)
+├── /projects                 ✅ Volunteer projects: search by text, ZIP + radius, county
+├── /projects/:id             ✅ Project: volunteer roles and shifts (sign-up: coming)
 └── /black-book               ↪ redirects to /contacts
 
 Authenticated
 ├── /dashboard                ✅ Organization Dashboard + My Staging Locations
 ├── /dashboard/orgs/:id/sites/new  ✅ New staging site
+├── /dashboard/orgs/:id/projects   ✅ My organization's projects
+├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete
 ├── /dashboard/sites/:id      ✅ Site detail: inventory, Update Availability, history
 ├── /dashboard/roads/new      ⏳ Submit Road Report
 ├── /dashboard/orgs/:id/profile ✅ My Organization Profile (public contacts, office ZIP, services, Contacts consent)
@@ -73,6 +77,7 @@ Authenticated
 Administrative
 ├── /admin/organizations      ✅ Organizations Awaiting Approval (+ suspend/reinstate)
 ├── /admin/events             ✅ Events: create, edit, activate, recover, close (executives)
+├── /admin/projects           ✅ Project review: approve or return pending projects (county admins, executives)
 ├── /admin/moderation         ⏳ Resource Moderation
 ├── /admin/publication        ⏳ Map Publication Controls (active-ops toggle)
 ├── /admin/roads              ⏳ Road Report Review

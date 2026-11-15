@@ -1,0 +1,73 @@
+-- ---------------------------------------------------------------------------
+-- Projects: local, need-based work posted by approved organizations for volunteers.
+-- Written only by the connection (system) role after the service re-derives the actor's role.
+-- No request role can read these tables; the public reads the public_* views (added below), which
+-- expose only OPEN projects of approved organizations and never the private location notes.
+-- ---------------------------------------------------------------------------
+CREATE TABLE projects (
+  id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id                 uuid NOT NULL REFERENCES organizations(id),
+  title                  text NOT NULL CHECK (length(title) BETWEEN 5 AND 140),
+  description            text NOT NULL CHECK (length(description) BETWEEN 10 AND 4000),
+  county_id              uuid NOT NULL REFERENCES counties(id),
+  zip                    text NOT NULL CHECK (zip ~ '^[0-9]{5}$'),
+  audience               text NOT NULL CHECK (audience IN ('COMMUNITY','ORG_FACILITY','HOUSEHOLD_GENERALIZED')),
+  status                 text NOT NULL DEFAULT 'DRAFT'
+                         CHECK (status IN ('DRAFT','PENDING_REVIEW','OPEN','PAUSED','COMPLETED','CANCELLED')),
+  -- Exact address or meeting point. Shown only to confirmed volunteers (a later stage); never public.
+  private_location_notes text CHECK (private_location_notes IS NULL OR length(private_location_notes) <= 1000),
+  review_note            text CHECK (review_note IS NULL OR length(review_note) <= 2000),
+  reviewed_by            uuid REFERENCES users(id),
+  reviewed_at            timestamptz,
+  created_by             uuid REFERENCES users(id),
+  created_at             timestamptz NOT NULL DEFAULT now(),
+  updated_at             timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX projects_org_idx ON projects (org_id);
+CREATE INDEX projects_county_status_idx ON projects (county_id, status);
+CREATE INDEX projects_zip_idx ON projects (zip);
+CREATE TRIGGER projects_touch BEFORE UPDATE ON projects FOR EACH ROW EXECUTE FUNCTION ics.touch_updated_at();
+
+CREATE TABLE project_needs (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id   uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- Stage 2 supports people needs only; Stage 6 relaxes this to include GOODS.
+  need_type    text NOT NULL DEFAULT 'PEOPLE' CHECK (need_type = 'PEOPLE'),
+  title        text NOT NULL CHECK (length(title) BETWEEN 3 AND 120),
+  details      text CHECK (details IS NULL OR length(details) <= 1000),
+  urgency      text NOT NULL DEFAULT 'NORMAL' CHECK (urgency IN ('NORMAL','URGENT')),
+  slots_needed int NOT NULL CHECK (slots_needed BETWEEN 1 AND 500),
+  starts_at    timestamptz,
+  ends_at      timestamptz,
+  skills       text CHECK (skills IS NULL OR length(skills) <= 200),
+  instructions text CHECK (instructions IS NULL OR length(instructions) <= 1000),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  CHECK (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)
+);
+CREATE INDEX project_needs_project_idx ON project_needs (project_id);
+CREATE TRIGGER project_needs_touch BEFORE UPDATE ON project_needs FOR EACH ROW EXECUTE FUNCTION ics.touch_updated_at();
+
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_needs ENABLE ROW LEVEL SECURITY;
+
+-- ---------------------------------------------------------------------------
+-- Public read model. Only OPEN projects of approved, non-suspended organizations. Whitelisted columns:
+-- the private location notes, review notes, volunteer instructions and user ids are never exposed.
+-- ---------------------------------------------------------------------------
+CREATE VIEW public_projects AS
+SELECT p.id, p.org_id, o.display_name AS org_name, p.title, p.description,
+       p.county_id, c.name AS county_name, c.state, p.zip, p.audience,
+       p.reviewed_at AS opened_at,
+       coalesce((SELECT sum(n.slots_needed) FROM project_needs n WHERE n.project_id = p.id), 0)::int AS total_slots,
+       EXISTS (SELECT 1 FROM project_needs n WHERE n.project_id = p.id AND n.urgency = 'URGENT') AS has_urgent
+  FROM projects p
+  JOIN organizations o ON o.id = p.org_id
+  JOIN counties c ON c.id = p.county_id
+ WHERE p.status = 'OPEN' AND o.status = 'APPROVED' AND NOT o.publication_suspended;
+
+CREATE VIEW public_project_needs AS
+SELECT n.id, n.project_id, n.title, n.details, n.urgency, n.slots_needed, n.starts_at, n.ends_at, n.skills
+  FROM project_needs n JOIN public_projects p ON p.id = n.project_id;
+
+GRANT SELECT ON public_projects, public_project_needs TO ics_anon, ics_app;

@@ -199,7 +199,7 @@ export type OrganizationProfile = {
   profileStatus: "PENDING" | "APPROVED" | "HIDDEN";
 };
 
-async function membershipRole(tx: Tx, orgId: string, userId: string): Promise<string | null> {
+export async function membershipRole(tx: Tx, orgId: string, userId: string): Promise<string | null> {
   const r = await tx.query<{ role: string }>(
     `SELECT m.role::text AS role FROM organization_memberships m JOIN users u ON u.id = m.user_id
       WHERE m.org_id = $1 AND m.user_id = $2 AND m.status = 'ACTIVE' AND u.status = 'ACTIVE'`,
