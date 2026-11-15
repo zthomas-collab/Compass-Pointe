@@ -50,6 +50,10 @@ export default async function AdminHome() {
           </li>
         )}
         <li className="card p-4">
+          <Link className="text-lg font-semibold text-brand underline" href="/admin/projects">Project review</Link>
+          <p className="mt-1 text-sm text-muted">Approve or return volunteer projects posted by organizations in your counties.</p>
+        </li>
+        <li className="card p-4">
           <Link className="text-lg font-semibold text-brand underline" href="/admin/counties">Counties and administrators</Link>
           <p className="mt-1 text-sm text-muted">{executive ? "Add counties and assign county administrators." : "See who administers your counties."}</p>
         </li>
