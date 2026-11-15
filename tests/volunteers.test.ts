@@ -3,7 +3,7 @@ import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { createCounty } from "@/server/modules/counties";
 import { addNeed, createProject, reviewProject, setProjectStatus, submitProject } from "@/server/modules/projects";
-import { signUpForNeed } from "@/server/modules/volunteers";
+import { cancelCommitment, confirmCommitment, getCommitmentByToken, signUpForNeed } from "@/server/modules/volunteers";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
 
@@ -178,5 +178,97 @@ describe("volunteer sign-up", () => {
     expect(rows).toHaveLength(1);
     const text = JSON.stringify(rows[0].details);
     for (const pii of ["Zelda", "zelda-audit", "555-010-7777"]) expect(text).not.toContain(pii);
+  });
+});
+
+describe("token page, confirm and cancel", () => {
+  /** The volunteer's token exists only in the email, so tests read it from the queued message like a real person would. */
+  const tokenFor = async (email: string) => {
+    const rows = await sys((tx) =>
+      tx.query<{ body_text: string }>(`SELECT body_text FROM notification_jobs WHERE recipient_email = $1 AND kind = 'VOLUNTEER_CONFIRM' ORDER BY created_at DESC, id DESC LIMIT 1`, [email]),
+    );
+    return /token=([A-Za-z0-9_-]+)/.exec(rows[0].body_text)![1];
+  };
+  const fresh = async (opts: NeedOpts = {}) => {
+    const { needIds } = await makeProject("OPEN", [opts], `Token project ${++n}`);
+    const email = uniqueEmail();
+    const { commitmentId } = await signup(needIds[0], { email });
+    return { needId: needIds[0], email, commitmentId, token: await tokenFor(email) };
+  };
+  const row = async (id: string) =>
+    (await sys((tx) => tx.query<{ status: string; confirmed_at: Date | null; cancelled_at: Date | null }>(`SELECT status, confirmed_at, cancelled_at FROM volunteer_commitments WHERE id = $1`, [id])))[0];
+  const events = async (id: string) =>
+    (await sys((tx) => tx.query<{ event_type: string; actor_role: string }>(`SELECT event_type, actor_role FROM volunteer_commitment_events WHERE commitment_id = $1 ORDER BY occurred_at, id`, [id])));
+
+  it("shows a pending sign-up read-only and never changes it on view", async () => {
+    const f = await fresh();
+    for (let i = 0; i < 5; i++) {
+      const v = (await getCommitmentByToken(db, f.token))!;
+      expect(v).toMatchObject({ status: "PENDING_EMAIL", privateLocationNotes: null, instructions: null, volunteerName: "Pat Volunteer" });
+      expect(v.project.title).toContain("Token project");
+      expect(v.holdExpiresAt).not.toBeNull();
+    }
+    expect(await row(f.commitmentId)).toMatchObject({ status: "PENDING_EMAIL", confirmed_at: null, cancelled_at: null });
+    expect((await events(f.commitmentId)).map((e) => e.event_type)).toEqual(["SIGNED_UP"]);
+  });
+
+  it("confirms with an explicit call and then reveals the private details", async () => {
+    const f = await fresh();
+    await confirmCommitment(db, f.token);
+    const v = (await getCommitmentByToken(db, f.token))!;
+    expect(v).toMatchObject({ status: "CONFIRMED", privateLocationNotes: PRIVATE_NOTES, instructions: INSTRUCTIONS });
+    await expect(confirmCommitment(db, f.token)).resolves.toBeUndefined();
+    expect((await events(f.commitmentId)).map((e) => e.event_type)).toEqual(["SIGNED_UP", "CONFIRMED"]);
+    const audited = await sys((tx) => tx.query(`SELECT 1 FROM audit_logs WHERE action = 'VOLUNTEER_CONFIRMED' AND subject_id = $1`, [f.commitmentId]));
+    expect(audited).toHaveLength(1);
+  });
+
+  it("reveals nothing for a wrong or malformed token", async () => {
+    const f = await fresh();
+    const hash = (await sys((tx) => tx.query<{ token_hash: string }>(`SELECT token_hash FROM volunteer_commitments WHERE id = $1`, [f.commitmentId])))[0].token_hash;
+    for (const bad of ["", "short", "x".repeat(43), "not a token!!", hash]) {
+      expect(await getCommitmentByToken(db, bad)).toBeNull();
+      await expect(confirmCommitment(db, bad)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(cancelCommitment(db, bad)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    }
+    expect(await row(f.commitmentId)).toMatchObject({ status: "PENDING_EMAIL", confirmed_at: null });
+  });
+
+  it("refuses to confirm after the hold expires, cancels it, and frees the slot", async () => {
+    const f = await fresh({ slots: 1 });
+    await sys((tx) => tx.query(`UPDATE volunteer_commitments SET hold_expires_at = now() - interval '1 minute' WHERE id = $1`, [f.commitmentId]));
+    await expect(confirmCommitment(db, f.token)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await row(f.commitmentId)).status).toBe("CANCELLED");
+    expect((await events(f.commitmentId)).map((e) => `${e.event_type}:${e.actor_role}`)).toContain("HOLD_EXPIRED:SYSTEM");
+    expect((await getCommitmentByToken(db, f.token))!).toMatchObject({ status: "CANCELLED", privateLocationNotes: null, instructions: null });
+    await expect(signup(f.needId, { email: uniqueEmail() })).resolves.toBeTruthy();
+  });
+
+  it("cancels a pending or confirmed sign-up, frees the slot, and is idempotent", async () => {
+    const f = await fresh({ slots: 1 });
+    await confirmCommitment(db, f.token);
+    await expect(signup(f.needId, { email: uniqueEmail() })).rejects.toMatchObject({ code: "CONFLICT" });
+    await cancelCommitment(db, f.token);
+    expect((await row(f.commitmentId)).status).toBe("CANCELLED");
+    await expect(cancelCommitment(db, f.token)).resolves.toBeUndefined();
+    expect((await getCommitmentByToken(db, f.token))!).toMatchObject({ status: "CANCELLED", privateLocationNotes: null, instructions: null });
+    await expect(signup(f.needId, { email: uniqueEmail() })).resolves.toBeTruthy();
+    const p = await fresh();
+    await cancelCommitment(db, p.token);
+    expect((await row(p.commitmentId)).status).toBe("CANCELLED");
+    await expect(confirmCommitment(db, p.token)).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("refuses to cancel once the shift has ended or attendance is recorded", async () => {
+    const a = await fresh();
+    await confirmCommitment(db, a.token);
+    await sys((tx) => tx.query(`UPDATE project_needs SET starts_at = now() - interval '5 hours', ends_at = now() - interval '1 hour' WHERE id = $1`, [a.needId]));
+    await expect(cancelCommitment(db, a.token)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await row(a.commitmentId)).status).toBe("CONFIRMED");
+    const b = await fresh();
+    await confirmCommitment(db, b.token);
+    await sys((tx) => tx.query(`UPDATE volunteer_commitments SET status = 'ATTENDED' WHERE id = $1`, [b.commitmentId]));
+    await expect(cancelCommitment(db, b.token)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await row(b.commitmentId)).status).toBe("ATTENDED");
   });
 });

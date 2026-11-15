@@ -13,7 +13,7 @@ import type { EmailTransport } from "../email";
 export const MAX_ATTEMPTS = 5;
 const CLAIM_MINUTES = 10;
 /** Kinds whose body contains a credential-like link. */
-const SECRET_KINDS = ["SIGN_IN", "EMAIL_CONFIRM", "INVITE"];
+const SECRET_KINDS = ["SIGN_IN", "EMAIL_CONFIRM", "INVITE", "VOLUNTEER_CONFIRM"];
 
 export type DrainResult = { claimed: number; sent: number; failed: number; dead: number };
 

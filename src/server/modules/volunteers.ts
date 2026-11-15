@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DAILY_SIGNUP_LIMIT, HOLD_HOURS } from "@/lib/volunteers";
+import { DAILY_SIGNUP_LIMIT, HOLD_HOURS, type CommitmentStatus } from "@/lib/volunteers";
 import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
@@ -121,6 +121,119 @@ export async function signUpForNeed(driver: Driver, raw: unknown): Promise<{ com
           `If you did not sign up, ignore this message and the spot will be released.`,
       });
       return { commitmentId: id };
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+export type CommitmentView = {
+  id: string;
+  status: CommitmentStatus;
+  volunteerName: string;
+  holdExpiresAt: string | null;
+  project: { id: string; title: string; orgName: string; countyName: string; state: string; zip: string };
+  need: { id: string; title: string; startsAt: string | null; endsAt: string | null; skills: string | null };
+  /** Only for a CONFIRMED or ATTENDED volunteer. */
+  privateLocationNotes: string | null;
+  /** Only for a CONFIRMED or ATTENDED volunteer. */
+  instructions: string | null;
+};
+
+type DbCommitment = {
+  id: string; need_id: string; status: CommitmentStatus; volunteer_name: string; hold_expires_at: Date | null;
+  project_id: string; project_title: string; org_name: string; county_name: string; state: string; zip: string;
+  need_title: string; starts_at: Date | null; ends_at: Date | null; skills: string | null;
+  private_location_notes: string | null; instructions: string | null; hold_expired: boolean;
+};
+
+/** Tokens are 32 random bytes in base64url (43 chars). Anything else cannot match and is not even looked up. */
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]{20,128}$/;
+
+const COMMITMENT_SELECT = `
+  SELECT c.id, c.need_id, c.status, c.volunteer_name, c.hold_expires_at,
+         (c.status = 'PENDING_EMAIL' AND c.hold_expires_at <= now()) AS hold_expired,
+         p.id AS project_id, p.title AS project_title, o.display_name AS org_name, ct.name AS county_name, ct.state, p.zip,
+         n.title AS need_title, n.starts_at, n.ends_at, n.skills, p.private_location_notes, n.instructions
+    FROM volunteer_commitments c
+    JOIN project_needs n ON n.id = c.need_id JOIN projects p ON p.id = n.project_id
+    JOIN organizations o ON o.id = p.org_id JOIN counties ct ON ct.id = p.county_id`;
+
+const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
+
+/**
+ * Read-only: the page behind the emailed link. Never changes anything, so an email scanner that prefetches the link
+ * cannot confirm or cancel. An unknown token gives null (the same answer as a malformed one).
+ * A pending sign-up whose hold has lapsed is shown as CANCELLED, which is what it is about to become.
+ */
+export async function getCommitmentByToken(driver: Driver, token: string): Promise<CommitmentView | null> {
+  if (typeof token !== "string" || !TOKEN_SHAPE.test(token)) return null;
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    const rows = await tx.query<DbCommitment>(`${COMMITMENT_SELECT} WHERE c.token_hash = $1`, [hashToken(token)]);
+    if (!rows.length) return null;
+    const r = rows[0];
+    const status: CommitmentStatus = r.hold_expired ? "CANCELLED" : r.status;
+    const reveal = status === "CONFIRMED" || status === "ATTENDED";
+    return {
+      id: r.id, status, volunteerName: r.volunteer_name, holdExpiresAt: status === "PENDING_EMAIL" ? iso(r.hold_expires_at) : null,
+      project: { id: r.project_id, title: r.project_title, orgName: r.org_name, countyName: r.county_name, state: r.state, zip: r.zip },
+      need: { id: r.need_id, title: r.need_title, startsAt: iso(r.starts_at), endsAt: iso(r.ends_at), skills: r.skills },
+      privateLocationNotes: reveal ? r.private_location_notes : null,
+      instructions: reveal ? r.instructions : null,
+    };
+  });
+}
+
+/** Lock order everywhere: the need first, then the commitment. Returns null for an unknown token. */
+async function lockByToken(tx: Tx, token: string): Promise<DbCommitment | null> {
+  if (typeof token !== "string" || !TOKEN_SHAPE.test(token)) return null;
+  const found = await tx.query<{ need_id: string }>(`SELECT need_id FROM volunteer_commitments WHERE token_hash = $1`, [hashToken(token)]);
+  if (!found.length) return null;
+  await tx.query(`SELECT 1 FROM project_needs WHERE id = $1 FOR UPDATE`, [found[0].need_id]);
+  const rows = await tx.query<DbCommitment>(`${COMMITMENT_SELECT} WHERE c.token_hash = $1 FOR UPDATE OF c`, [hashToken(token)]);
+  return rows[0] ?? null;
+}
+
+const shiftEnded = (c: DbCommitment) => c.ends_at !== null && new Date(c.ends_at).getTime() <= Date.now();
+
+/** Volunteer: confirm a sign-up (an explicit action, never a page view). Idempotent once confirmed. */
+export async function confirmCommitment(driver: Driver, token: string): Promise<void> {
+  try {
+    const outcome = await runIn(driver, { kind: "system" }, async (tx): Promise<"ok" | "expired"> => {
+      const c = await lockByToken(tx, token);
+      if (!c) throw new AppError("NOT_FOUND", "This link is not valid.");
+      if (c.status === "CONFIRMED" || c.status === "ATTENDED") return "ok";
+      if (c.status !== "PENDING_EMAIL") throw new AppError("VALIDATION", "This sign-up was cancelled. You can sign up again from the project page.");
+      if (c.hold_expired) {
+        // The cancellation must commit even though the caller is told no, so it is returned rather than thrown here.
+        await tx.query(`UPDATE volunteer_commitments SET status = 'CANCELLED', cancelled_at = now() WHERE id = $1`, [c.id]);
+        await recordEvent(tx, c.id, "HOLD_EXPIRED", "PENDING_EMAIL", "CANCELLED", "SYSTEM");
+        return "expired";
+      }
+      if (shiftEnded(c)) throw new AppError("VALIDATION", "This shift has already ended.");
+      await tx.query(`UPDATE volunteer_commitments SET status = 'CONFIRMED', confirmed_at = now() WHERE id = $1`, [c.id]);
+      await recordEvent(tx, c.id, "CONFIRMED", "PENDING_EMAIL", "CONFIRMED", "VOLUNTEER");
+      await writeAudit(tx, { actorUserId: null, action: "VOLUNTEER_CONFIRMED", subjectType: "volunteer_commitment", subjectId: c.id, details: { needId: c.need_id } });
+      return "ok";
+    });
+    if (outcome === "expired") throw new AppError("VALIDATION", "The 24-hour hold on this spot has ended. Please sign up again from the project page.");
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+/** Volunteer: cancel a pending or confirmed sign-up until the shift ends. Idempotent once cancelled. */
+export async function cancelCommitment(driver: Driver, token: string): Promise<void> {
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const c = await lockByToken(tx, token);
+      if (!c) throw new AppError("NOT_FOUND", "This link is not valid.");
+      if (c.status === "CANCELLED") return;
+      if (c.status === "ATTENDED" || c.status === "NO_SHOW") throw new AppError("VALIDATION", "Attendance has been recorded, so this sign-up can no longer be cancelled.");
+      if (shiftEnded(c)) throw new AppError("VALIDATION", "This shift has already ended.");
+      await tx.query(`UPDATE volunteer_commitments SET status = 'CANCELLED', cancelled_at = now() WHERE id = $1`, [c.id]);
+      await recordEvent(tx, c.id, "CANCELLED", c.status, "CANCELLED", "VOLUNTEER");
+      await writeAudit(tx, { actorUserId: null, action: "VOLUNTEER_CANCELLED", subjectType: "volunteer_commitment", subjectId: c.id, details: { needId: c.need_id } });
     });
   } catch (err) {
     throw fromDbError(err);

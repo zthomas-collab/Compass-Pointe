@@ -82,6 +82,14 @@ describe("notification worker", () => {
     expect((await job("note@example.org")).body_text).toBe("Your organization was approved.");
   });
 
+  it("redacts a volunteer confirmation link after sending, while the transport received it", async () => {
+    await enqueue("volunteer@example.org", "VOLUNTEER_CONFIRM", "Confirm here: https://app.example/volunteer/commitments?token=VOLUNTEERSECRET");
+    const t = new FakeTransport();
+    await processNotificationJobs(db, t);
+    expect(t.sent.find((m) => m.to === "volunteer@example.org")!.text).toContain("VOLUNTEERSECRET");
+    expect((await job("volunteer@example.org")).body_text).toBe("[redacted after sending]");
+  });
+
   it("backs off after a failure, hides credentials in the stored error, and ends as DEAD", async () => {
     await enqueue("bad@example.org");
     const t = new FakeTransport();
