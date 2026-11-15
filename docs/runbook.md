@@ -52,5 +52,8 @@ Roll back the container image to the previous tag. Because migrations are expand
 ## Backup & restore — **UNTESTED**
 Managed PITR with ≥ 14-day retention plus a daily logical dump to a separate account. Quarterly drill: restore to a new instance, run `npm test` against it with `DATABASE_URL`, compare row counts of `staging_sites`, `resources`, `resource_update_events`, `audit_logs`, record timings (RTO/RPO targets 4 h / 15 min in SOP-014).
 
+## Volunteer data (personal data) — **needs a policy before launch**
+Volunteer sign-ups store a name, email, phone and a hashed private-link token in `volunteer_commitments`, visible only to the owning organization's editors, the project's county administrators and executives. There is **no retention or anonymization job yet**: decide how long to keep sign-ups after a project ends (and how a volunteer can ask for erasure) and add the job before public launch. Confirmation emails carry the private link; the notification worker redacts the stored body after sending (kind `VOLUNTEER_CONFIRM`). Never log or audit a volunteer's name, email, phone or token.
+
 ## Known production blockers
 Managed auth + MFA (M1) · licensed tiles (M2) · email provider + worker (M4) · shared rate limiter · nonce-based CSP · tests on real PostGIS · load tests over HTTP · legal copy (M8). See `docs/01-assumptions-risks.md`.
