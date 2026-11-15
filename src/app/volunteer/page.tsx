@@ -55,7 +55,7 @@ export default async function VolunteerHubPage() {
 
             {urgent.length > 0 ? (
               <div className="mt-5">
-                <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">Needed now</h3>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{urgent.some((p) => p.hasUrgent) ? "Needed now" : "Open now"}</h3>
                 <ul className="mt-2 divide-y divide-line">
                   {urgent.map((p) => (
                     <li key={p.id} className="py-2">
