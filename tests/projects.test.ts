@@ -4,7 +4,7 @@ import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
 import {
   addNeed, createProject, getProjectForEditor, listOrgProjects, listProjectsForReview, removeNeed, reviewProject, setProjectStatus,
-  submitProject, updateNeed, updateProject,
+  getPublicProject, searchProjects, submitProject, updateNeed, updateProject,
 } from "@/server/modules/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
@@ -316,5 +316,118 @@ describe("submit, review, and status", () => {
     expect((await get(d)).status).toBe("CANCELLED");
     await expect(setProjectStatus(db, u.viewer, d, "CANCELLED")).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await audited(id, "PROJECT_STATUS_CHANGED")).toBe(4);
+  });
+});
+
+describe("public projects", () => {
+  const SECRET_NOTE = "Meet at the gravel lot behind the church";
+  const SECRET_INSTRUCTIONS = "SECRET-INSTRUCTIONS-park-on-elm";
+  const SECRET_REVIEW = "SECRET-REVIEW-NOTE-remove-address";
+  const pub = async (raw: Record<string, unknown> = {}) =>
+    (await searchProjects(db, raw)).projects.filter((p) => p.title.startsWith("Public Case"));
+  const titles = async (raw: Record<string, unknown> = {}) => (await pub(raw)).map((p) => p.title).sort();
+  const draft = async (title: string, o: { zip?: string; county?: string; org?: string; by?: string; needTitle?: string } = {}) => {
+    const by = o.by ?? u.admin;
+    const id = await createProject(db, by, o.org ?? orgA, base({ title, zip: o.zip ?? "28801", countyId: o.county ?? buncombe }));
+    await addNeed(db, by, id, { title: o.needTitle ?? "Volunteer crew", slotsNeeded: 4, urgency: "NORMAL", instructions: SECRET_INSTRUCTIONS });
+    return id;
+  };
+  const open = async (title: string, o: Parameters<typeof draft>[1] = {}) => {
+    const id = await draft(title, o);
+    await submitProject(db, o.by ?? u.admin, id);
+    await reviewProject(db, exec, id, { decision: "APPROVE", note: "Approved for the public" });
+    return id;
+  };
+
+  it("shows only OPEN projects of approved orgs, with needs and no private fields", async () => {
+    const pending = await draft("Public Case pending");
+    await submitProject(db, u.admin, pending);
+    await draft("Public Case draft only");
+    const paused = await open("Public Case paused");
+    await setProjectStatus(db, u.admin, paused, "PAUSED");
+    const done = await open("Public Case completed");
+    await setProjectStatus(db, u.admin, done, "COMPLETED");
+    const returned = await draft("Public Case with review note");
+    await submitProject(db, u.admin, returned);
+    await reviewProject(db, exec, returned, { decision: "RETURN", note: SECRET_REVIEW });
+    await submitProject(db, u.admin, returned);
+    await reviewProject(db, exec, returned, { decision: "APPROVE", note: "Fixed, approved" });
+    const live = await open("Public Case live");
+
+    expect(await titles()).toEqual(["Public Case live", "Public Case with review note"]);
+    for (const hidden of [pending, paused, done]) expect(await getPublicProject(db, hidden)).toBeNull();
+    const detail = (await getPublicProject(db, live))!;
+    expect(detail).toMatchObject({ title: "Public Case live", countyName: "Buncombe", state: "NC", zip: "28801", totalSlots: 4 });
+    expect(detail.needs).toMatchObject([{ title: "Volunteer crew", slotsNeeded: 4, urgency: "NORMAL" }]);
+
+    const everything = JSON.stringify([await searchProjects(db, {}), detail, await getPublicProject(db, returned)]);
+    for (const secret of [SECRET_NOTE, SECRET_INSTRUCTIONS, SECRET_REVIEW]) expect(everything).not.toContain(secret);
+    const cols = await sys((tx) =>
+      tx.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name IN ('public_projects','public_project_needs')`),
+    );
+    const names = cols.map((c) => c.column_name);
+    expect(names.length).toBeGreaterThan(5);
+    for (const banned of ["private_location_notes", "review_note", "instructions", "created_by", "reviewed_by"]) expect(names).not.toContain(banned);
+    expect(await getPublicProject(db, "not-a-uuid")).toBeNull();
+  });
+
+  it("hides a project the moment its org is suspended", async () => {
+    const id = await open("Public Case suspension check");
+    expect(await titles()).toContain("Public Case suspension check");
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = true WHERE id = $1`, [orgA]));
+    expect(await titles()).not.toContain("Public Case suspension check");
+    expect(await getPublicProject(db, id)).toBeNull();
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = false WHERE id = $1`, [orgA]));
+    expect(await titles()).toContain("Public Case suspension check");
+  });
+
+  it("hides an approved project again after its content changes", async () => {
+    const id = await open("Public Case edited after approval");
+    expect(await titles()).toContain("Public Case edited after approval");
+    await updateProject(db, u.admin, id, base({ title: "Public Case edited after approval", description: "A materially different description now." }));
+    expect(await titles()).not.toContain("Public Case edited after approval");
+    expect(await getPublicProject(db, id)).toBeNull();
+    await reviewProject(db, exec, id, { decision: "APPROVE", note: "Re-approved after edit" });
+    expect(await titles()).toContain("Public Case edited after approval");
+  });
+
+  it("searches by text across title, description and need titles", async () => {
+    await open("Public Case quiet title", { needTitle: "Zebrafish rescue shift" });
+    expect(await titles({ q: "zebrafish" })).toEqual(["Public Case quiet title"]);
+    expect(await titles({ q: "flood damage" })).toContain("Public Case quiet title");
+    expect(await titles({ q: "nothingmatchesthis" })).toEqual([]);
+  });
+
+  it("sorts by distance for a ZIP and honors the radius", async () => {
+    await sys((tx) =>
+      tx.query(
+        `INSERT INTO zip_codes (zip, location) VALUES ('28801', ST_GeogFromText('POINT(-82.55 35.59)')), ('28806', ST_GeogFromText('POINT(-82.85 35.59)'))
+         ON CONFLICT (zip) DO NOTHING`,
+      ),
+    );
+    await open("Public Case near", { zip: "28801" });
+    await open("Public Case farther", { zip: "28806" });
+    const near5 = await pub({ zip: "28801", radius: 5 });
+    expect(near5.map((p) => p.title)).toContain("Public Case near");
+    expect(near5.map((p) => p.title)).not.toContain("Public Case farther");
+    const near25 = await pub({ zip: "28801", radius: 25 });
+    const order = near25.map((p) => p.title).filter((t) => ["Public Case near", "Public Case farther"].includes(t));
+    expect(order).toEqual(["Public Case near", "Public Case farther"]);
+    expect(near25.find((p) => p.title === "Public Case near")!.distanceMiles).toBe(0);
+    expect(near25.find((p) => p.title === "Public Case farther")!.distanceMiles).toBeGreaterThan(10);
+  });
+
+  it("filters by county", async () => {
+    const hOrg = await makeOrg(db, { name: "Henderson Public Org", members: [{ userId: u.other, role: "EDITOR" }] });
+    await sys((tx) => tx.query(`INSERT INTO organization_counties (org_id, county_id) VALUES ($1, $2)`, [hOrg, henderson]));
+    await open("Public Case in Henderson", { org: hOrg, by: u.other, county: henderson, zip: hendersonZip });
+    expect(await titles({ countyId: henderson })).toEqual(["Public Case in Henderson"]);
+    expect(await titles({ countyId: buncombe })).not.toContain("Public Case in Henderson");
+  });
+
+  it("rejects a malformed ZIP, radius or county id", async () => {
+    await expect(searchProjects(db, { zip: "abc" })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(searchProjects(db, { zip: "28801", radius: 7 })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(searchProjects(db, { countyId: "nope" })).rejects.toMatchObject({ code: "VALIDATION" });
   });
 });

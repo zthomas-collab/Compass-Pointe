@@ -4,7 +4,7 @@ import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
 import { canManageCounty, loadAccess } from "./access";
-import { membershipRole } from "./directory";
+import { DEFAULT_RADIUS_MILES, RADIUS_OPTIONS_MILES, membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
 
@@ -437,5 +437,140 @@ export async function listProjectsForReview(driver: Driver, actorId: string): Pr
     const out: ProjectRow[] = [];
     for (const r of rows) out.push(toProject(r, await loadNeeds(tx, r.id)));
     return out;
+  });
+}
+
+export type PublicNeed = {
+  id: string;
+  title: string;
+  details: string | null;
+  urgency: "NORMAL" | "URGENT";
+  slotsNeeded: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  skills: string | null;
+};
+
+export type PublicProject = {
+  id: string;
+  orgId: string;
+  orgName: string;
+  title: string;
+  description: string;
+  countyName: string;
+  state: string;
+  zip: string;
+  audience: string;
+  totalSlots: number;
+  hasUrgent: boolean;
+  needs: PublicNeed[];
+  distanceMiles: number | null;
+};
+
+export const projectSearchSchema = z.object({
+  q: z.string().trim().max(100).optional().default(""),
+  zip: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{5}$/, "Enter a 5-digit ZIP code")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  radius: z.coerce
+    .number()
+    .refine((v) => (RADIUS_OPTIONS_MILES as readonly number[]).includes(v), "Choose a listed radius")
+    .optional()
+    .default(DEFAULT_RADIUS_MILES),
+  countyId: z
+    .string()
+    .uuid()
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+});
+
+const METERS_PER_MILE = 1609.344;
+const likePattern = (q: string) => `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
+
+type DbPublicProject = {
+  id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
+  audience: string; total_slots: number; has_urgent: boolean; dist_m?: number | null;
+};
+type DbPublicNeed = {
+  id: string; project_id: string; title: string; details: string | null; urgency: "NORMAL" | "URGENT"; slots_needed: number;
+  starts_at: Date | null; ends_at: Date | null; skills: string | null;
+};
+
+const toPublicNeed = (n: DbPublicNeed): PublicNeed => ({
+  id: n.id, title: n.title, details: n.details, urgency: n.urgency, slotsNeeded: n.slots_needed,
+  startsAt: n.starts_at ? new Date(n.starts_at).toISOString() : null,
+  endsAt: n.ends_at ? new Date(n.ends_at).toISOString() : null,
+  skills: n.skills,
+});
+
+async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, PublicNeed[]>> {
+  const out = new Map<string, PublicNeed[]>();
+  if (!projectIds.length) return out;
+  const rows = await tx.query<DbPublicNeed>(
+    `SELECT id, project_id, title, details, urgency, slots_needed, starts_at, ends_at, skills
+       FROM public_project_needs WHERE project_id = ANY($1::uuid[]) ORDER BY starts_at NULLS LAST, title, id`,
+    [projectIds],
+  );
+  for (const r of rows) out.set(r.project_id, [...(out.get(r.project_id) ?? []), toPublicNeed(r)]);
+  return out;
+}
+
+const toPublicProject = (p: DbPublicProject, needs: PublicNeed[]): PublicProject => ({
+  id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyName: p.county_name,
+  state: p.state, zip: p.zip, audience: p.audience, totalSlots: p.total_slots, hasUrgent: p.has_urgent, needs,
+  distanceMiles: p.dist_m === null || p.dist_m === undefined ? null : Math.round((Number(p.dist_m) / METERS_PER_MILE) * 10) / 10,
+});
+
+/**
+ * Public project search (no sign-in). Reads only the public views and ics.zip_point.
+ * With a ZIP, projects within the radius come nearest first (when either ZIP point is unknown, only an exact ZIP matches);
+ * without one, projects with an urgent need come first, then the most recently opened.
+ */
+export async function searchProjects(
+  driver: Driver,
+  raw: unknown = {},
+): Promise<{ projects: PublicProject[]; zip: string | null; radiusMiles: number }> {
+  const q = parseOrThrow(projectSearchSchema, raw);
+  const terms = q.q.split(/\s+/).filter(Boolean).slice(0, 6).map(likePattern);
+  const zip = q.zip ?? null;
+  return runIn(driver, { kind: "anon" }, async (tx) => {
+    const rows = await tx.query<DbPublicProject>(
+      `WITH origin AS (SELECT CASE WHEN $2::text IS NULL THEN NULL ELSE ics.zip_point($2) END AS pt),
+            scored AS (
+              SELECT p.*, CASE WHEN origin.pt IS NULL OR ics.zip_point(p.zip) IS NULL THEN NULL
+                               ELSE ST_Distance(ics.zip_point(p.zip), origin.pt) END AS dist_m
+                FROM public_projects p CROSS JOIN origin)
+       SELECT s.id, s.org_id, s.org_name, s.title, s.description, s.county_name, s.state, s.zip, s.audience,
+              s.total_slots, s.has_urgent, s.dist_m
+         FROM scored s
+        WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[]) t
+                           WHERE NOT (s.title ILIKE t OR s.description ILIKE t
+                                      OR EXISTS (SELECT 1 FROM public_project_needs n
+                                                  WHERE n.project_id = s.id AND (n.title ILIKE t OR coalesce(n.skills, '') ILIKE t))))
+          AND ($3::uuid IS NULL OR s.county_id = $3)
+          AND ($2::text IS NULL OR (s.dist_m IS NOT NULL AND s.dist_m <= $4) OR (s.dist_m IS NULL AND s.zip = $2))
+        ORDER BY s.dist_m NULLS LAST, s.has_urgent DESC, s.opened_at DESC, s.title
+        LIMIT 100`,
+      [terms, zip, q.countyId ?? null, q.radius * METERS_PER_MILE],
+    );
+    const needs = await publicNeeds(tx, rows.map((r) => r.id));
+    return { zip, radiusMiles: q.radius, projects: rows.map((r) => toPublicProject(r, needs.get(r.id) ?? [])) };
+  });
+}
+
+/** Public: one OPEN project of an approved organization, or null. */
+export async function getPublicProject(driver: Driver, id: string): Promise<PublicProject | null> {
+  if (!z.string().uuid().safeParse(id).success) return null;
+  return runIn(driver, { kind: "anon" }, async (tx) => {
+    const rows = await tx.query<DbPublicProject>(
+      `SELECT id, org_id, org_name, title, description, county_name, state, zip, audience, total_slots, has_urgent
+         FROM public_projects WHERE id = $1`,
+      [id],
+    );
+    if (!rows.length) return null;
+    return toPublicProject(rows[0], (await publicNeeds(tx, [id])).get(id) ?? []);
   });
 }

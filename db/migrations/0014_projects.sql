@@ -50,3 +50,24 @@ CREATE TRIGGER project_needs_touch BEFORE UPDATE ON project_needs FOR EACH ROW E
 
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_needs ENABLE ROW LEVEL SECURITY;
+
+-- ---------------------------------------------------------------------------
+-- Public read model. Only OPEN projects of approved, non-suspended organizations. Whitelisted columns:
+-- the private location notes, review notes, volunteer instructions and user ids are never exposed.
+-- ---------------------------------------------------------------------------
+CREATE VIEW public_projects AS
+SELECT p.id, p.org_id, o.display_name AS org_name, p.title, p.description,
+       p.county_id, c.name AS county_name, c.state, p.zip, p.audience,
+       p.reviewed_at AS opened_at,
+       coalesce((SELECT sum(n.slots_needed) FROM project_needs n WHERE n.project_id = p.id), 0)::int AS total_slots,
+       EXISTS (SELECT 1 FROM project_needs n WHERE n.project_id = p.id AND n.urgency = 'URGENT') AS has_urgent
+  FROM projects p
+  JOIN organizations o ON o.id = p.org_id
+  JOIN counties c ON c.id = p.county_id
+ WHERE p.status = 'OPEN' AND o.status = 'APPROVED' AND NOT o.publication_suspended;
+
+CREATE VIEW public_project_needs AS
+SELECT n.id, n.project_id, n.title, n.details, n.urgency, n.slots_needed, n.starts_at, n.ends_at, n.skills
+  FROM project_needs n JOIN public_projects p ON p.id = n.project_id;
+
+GRANT SELECT ON public_projects, public_project_needs TO ics_anon, ics_app;
