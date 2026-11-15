@@ -2,8 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { SignUpForm } from "@/components/signup-forms";
+import { Breadcrumb, VolunteerSectionNav } from "@/components/volunteer-nav";
 import { PROJECT_AUDIENCE_LABELS } from "@/lib/projects";
 import { formatShift } from "@/lib/shift";
+import { VOLUNTEER_PATHS } from "@/lib/volunteer-paths";
 import { signUpAction } from "../signup-actions";
 import { getDriver } from "@/server/db";
 import { getPublicOrganization } from "@/server/modules/directory";
@@ -30,8 +32,14 @@ export default async function ProjectPage({ params }: Params) {
   const orgProfile = await getPublicOrganization(db, project.orgId);
   const events = await listPublicProjectEvents(db, project.id);
   return (
+    <>
+    <VolunteerSectionNav current="shifts" />
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
-      <Link href="/projects" className="text-sm text-brand underline">← All projects</Link>
+      <Breadcrumb items={[
+        { label: "Volunteer & donate", href: VOLUNTEER_PATHS.hub },
+        { label: "Find a shift", href: VOLUNTEER_PATHS.shifts },
+        { label: project.title },
+      ]} />
       <h1 className="mt-2 text-3xl">{project.title}</h1>
       <p className="mt-1 text-sm text-muted">
         {orgProfile ? <Link className="underline" href={`/orgs/${project.orgId}`}>{project.orgName}</Link> : project.orgName}
@@ -71,12 +79,16 @@ export default async function ProjectPage({ params }: Params) {
                   <SignUpForm action={signUpAction.bind(null, n.id)} orgName={project.orgName} />
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-muted">{n.spotsLeft > 0 ? "This shift has ended." : "This role is full right now. Spots open up when someone cancels."}</p>
+                <p className="mt-2 text-sm text-muted">{n.ended ? "This shift has ended." : "This role is full right now. Spots open up when someone cancels."}</p>
               )}
             </li>
           ))}
         </ul>
+        <p className="mt-6 text-sm">
+          <Link className="underline" href={VOLUNTEER_PATHS.shifts}>← See all shifts</Link>
+        </p>
       </section>
     </div>
+    </>
   );
 }

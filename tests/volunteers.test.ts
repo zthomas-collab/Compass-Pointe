@@ -517,6 +517,9 @@ describe("withdrawn projects and volunteer notices", () => {
       expect(n).toHaveLength(1);
       expect(n[0].subject.toLowerCase()).toContain("cancel");
       expect(n[0].body_text).toContain("Notice on cancel project");
+      // The "other shifts" link points at the section's new address, not the old redirecting one.
+      expect(n[0].body_text).toContain("/volunteer/projects");
+      expect(n[0].body_text).not.toMatch(/https?:\/\/[^/\s]+\/projects/);
       expect(n[0].body_text).not.toContain("token=");
       expect(n[0].body_text).not.toContain(PRIVATE_NOTES);
     }

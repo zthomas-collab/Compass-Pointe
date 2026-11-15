@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Breadcrumb, VolunteerSectionNav } from "@/components/volunteer-nav";
 import { PROJECT_AUDIENCE_LABELS } from "@/lib/projects";
+import { VOLUNTEER_PATHS, donatePath, shiftPath } from "@/lib/volunteer-paths";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
 import { listCounties } from "@/server/modules/counties";
@@ -27,8 +29,11 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
   }
   const filtering = Boolean(query.q || query.zip || query.countyId);
   return (
+    <>
+    <VolunteerSectionNav current="shifts" />
     <div className="mx-auto w-full max-w-4xl px-4 py-6">
-      <h1 className="text-3xl">Volunteer projects</h1>
+      <Breadcrumb items={[{ label: "Volunteer & donate", href: VOLUNTEER_PATHS.hub }, { label: "Find a shift" }]} />
+      <h1 className="mt-2 text-3xl">Find a volunteer shift</h1>
       <p className="mt-1 text-sm text-muted">Local needs posted by approved organizations. Each project lists the volunteer roles that need filling.</p>
 
       <form method="get" className="card mt-4 grid gap-3 p-4 sm:grid-cols-[1fr_8rem_9rem_auto] sm:items-end">
@@ -47,7 +52,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
           </select></label>
         <div className="flex gap-2">
           <button className="btn btn-primary" type="submit">Search</button>
-          {filtering && <Link className="btn btn-secondary" href="/projects">Clear</Link>}
+          {filtering && <Link className="btn btn-secondary" href={VOLUNTEER_PATHS.shifts}>Clear</Link>}
         </div>
       </form>
 
@@ -57,7 +62,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
         <ul className="mt-5 grid gap-3" aria-label="Projects">
           {result.projects.map((p) => (
             <li key={p.id} className="card p-4">
-              <Link className="text-lg font-semibold text-brand underline" href={`/projects/${p.id}`}>{p.title}</Link>
+              <Link className="text-lg font-semibold text-brand underline" href={shiftPath(p.id)}>{p.title}</Link>
               <p className="mt-1 flex flex-wrap items-center gap-2 text-sm">
                 {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent need</span>}
                 <span className={`badge ${p.spotsLeft > 0 ? "tone-brand" : "tone-muted"}`}>
@@ -73,10 +78,22 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
             </li>
           ))}
           {result.projects.length === 0 && (
-            <li className="text-sm text-muted">{filtering ? "No open projects match your search." : "No projects are open right now."}</li>
+            <li className="text-sm text-muted">{filtering ? "No open shifts match your search." : "No shifts are open right now."}</li>
           )}
         </ul>
       )}
+
+      <aside className="card mt-8 p-4" aria-labelledby="other-ways-h">
+        <h2 id="other-ways-h" className="text-lg font-semibold">Not finding the right fit?</h2>
+        <p className="mt-1 text-sm text-muted">
+          You can still help: offer your skills, or donate supplies, equipment or space, and a coordinator will match it to a real need.
+        </p>
+        <p className="mt-3 flex flex-wrap gap-3">
+          <Link className="btn btn-secondary" href={donatePath("PROFESSIONAL_SKILLS")}>Offer my skills</Link>
+          <Link className="btn btn-secondary" href={VOLUNTEER_PATHS.donate}>Donate supplies or space</Link>
+        </p>
+      </aside>
     </div>
+    </>
   );
 }

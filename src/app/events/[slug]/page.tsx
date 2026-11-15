@@ -5,6 +5,7 @@ import { EventStatusBadge, HAZARD_LABELS } from "@/components/event-status";
 import { AvailabilityBadge } from "@/components/status";
 import { getDriver } from "@/server/db";
 import { formatShift } from "@/lib/shift";
+import { shiftPath } from "@/lib/volunteer-paths";
 import { listEventProjects } from "@/server/modules/eventlinks";
 import { getEventHelp, getPublicEvent } from "@/server/modules/events";
 
@@ -86,7 +87,7 @@ export default async function EventPage({ params }: Params) {
             <ul className="mt-3 grid gap-3">
               {projects.map((p) => (
                 <li key={p.id} className="card p-4">
-                  <Link className="text-lg font-semibold text-brand underline" href={`/projects/${p.id}`}>{p.title}</Link>
+                  <Link className="text-lg font-semibold text-brand underline" href={shiftPath(p.id)}>{p.title}</Link>
                   <p className="mt-1 flex flex-wrap items-center gap-2 text-sm">
                     {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent need</span>}
                     <span className={`badge ${p.spotsLeft > 0 ? "tone-brand" : "tone-muted"}`}>
