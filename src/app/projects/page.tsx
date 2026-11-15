@@ -61,7 +61,9 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
               <p className="mt-1 flex flex-wrap items-center gap-2 text-sm">
                 {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent need</span>}
                 <span className={`badge ${p.spotsLeft > 0 ? "tone-brand" : "tone-muted"}`}>
-                  {p.spotsLeft > 0 ? `${p.spotsLeft} of ${p.totalSlots} spots left` : `Full (${p.totalSlots} of ${p.totalSlots})`}
+                  {p.needs.length > 0 && p.needs.every((n) => n.ended)
+                    ? "Shifts ended"
+                    : p.spotsLeft > 0 ? `${p.spotsLeft} of ${p.totalSlots} spots left` : `Full (${p.totalSlots} of ${p.totalSlots})`}
                 </span>
                 <span className="text-muted">{p.orgName} · {p.countyName}, {p.state} {p.zip}
                   {p.distanceMiles !== null && <> · {p.distanceMiles} mi away</>}</span>

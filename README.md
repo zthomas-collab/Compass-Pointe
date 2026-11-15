@@ -27,7 +27,7 @@ First vertical slice (Phases 0–2 + part of 3):
 - ✅ One photo per location (re-encoded, GPS/EXIF stripped), shown to exactly the people who can see the location
 - ✅ Public **Contacts** at `/contacts` (the spec's Black Book): approved organizations that opted in, searchable by name, description, type and ZIP code with a radius filter — no sign-in
 - ✅ Brand palette, status colors with icons + text, full map key (axe: 0 violations); brand now configurable (see above)
-- ✅ 287 automated tests (plus one real-PostgreSQL concurrency test that runs when DATABASE_URL is set) against real PostgreSQL 18 + PostGIS 3.6 (PGlite)
+- ✅ 294 automated tests (plus one real-PostgreSQL concurrency test that runs when DATABASE_URL is set) against real PostgreSQL 18 + PostGIS 3.6 (PGlite)
 - ⏳ Road reports, restricted (authorized-only) contacts, dashboards, notification worker, managed auth/MFA — see [milestones](docs/05-milestones-acceptance.md)
 
 **Not production-ready.** Authentication is a development adapter, no email leaves the machine, and the basemap is a free no-SLA provider. See [assumptions & risks](docs/01-assumptions-risks.md).

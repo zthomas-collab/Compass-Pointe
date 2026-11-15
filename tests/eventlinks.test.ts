@@ -369,6 +369,13 @@ describe("public event needs", () => {
     await setEventStatus(db, exec, e, "CLOSED");
     expect(await listEventProjects(db, e)).toEqual([]);
     expect((await linkRow(p.id, e)).state).toBe("CONFIRMED");
+    // Force a confirmed link to the draft event so the answer is empty because of the event's status, not for lack of links.
+    await sys((tx) =>
+      tx.query(
+        `INSERT INTO project_event_links (project_id, event_id, state, decided_by, decided_by_role, decided_at) VALUES ($1, $2, 'CONFIRMED', $3, 'ADMIN', now())`,
+        [p.id, ev.draft, exec],
+      ),
+    );
     expect(await listEventProjects(db, ev.draft)).toEqual([]);
     expect(await listEventProjects(db, "00000000-0000-0000-0000-000000000000")).toEqual([]);
     expect(await listEventProjects(db, "not-a-uuid")).toEqual([]);
@@ -376,10 +383,11 @@ describe("public event needs", () => {
 
   it("orders urgent projects first, then the soonest shift, then title", async () => {
     const e = await event(`Needs event ${++n}`, [buncombe]);
-    await open("Order C later", { eventId: e, startsInHours: 96 });
-    await open("Order B sooner", { eventId: e, startsInHours: 24 });
-    await open("Order A urgent", { eventId: e, startsInHours: 200, urgent: true });
-    expect(await titles(e)).toEqual(["Order A urgent", "Order B sooner", "Order C later"]);
+    // Alphabetical order is the OPPOSITE of the expected order, so removing either sort key would fail this test.
+    await open("Xray later", { eventId: e, startsInHours: 96 });
+    await open("Yankee sooner", { eventId: e, startsInHours: 24 });
+    await open("Zulu urgent", { eventId: e, startsInHours: 200, urgent: true });
+    expect(await titles(e)).toEqual(["Zulu urgent", "Yankee sooner", "Xray later"]);
   });
 
   it("lists a project's public events and never a draft event", async () => {
@@ -409,5 +417,78 @@ describe("public event needs", () => {
   it("exposes only ids in the public view", async () => {
     const cols = await sys((tx) => tx.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name = 'public_event_links' ORDER BY column_name`));
     expect(cols.map((c) => c.column_name)).toEqual(["event_id", "project_id"]);
+  });
+});
+
+describe("fixes from the independent review", () => {
+  const future = (hours: number) => new Date(Date.now() + hours * 3600_000).toISOString();
+
+  /** An OPEN project of orgA whose needs run at the given offsets (hours from now: [start, end, slots]). */
+  async function openWith(title: string, eventId: string, needs: [number, number, number][]) {
+    const id = await createProject(db, u.admin, orgA, {
+      title, description: "Volunteers help clear flood damage from homes in the neighborhood.",
+      countyId: buncombe, zip: "28801", audience: "COMMUNITY",
+    });
+    for (const [i, [s, e, slots]] of needs.entries()) {
+      await addNeed(db, u.admin, id, { title: `${title} role ${i + 1}`, slotsNeeded: slots, startsAt: future(s), endsAt: future(e) });
+    }
+    await submitProject(db, u.admin, id);
+    await reviewProject(db, exec, id, { decision: "APPROVE", note: "Approved for volunteers" });
+    await linkProjectToEvent(db, u.admin, id, eventId);
+    return id;
+  }
+
+  it("does not count a shift that has already ended as a spot left", async () => {
+    const e = await event("Ended shift event", [buncombe]);
+    await openWith("Ended shift project", e, [[-10, -6, 5]]);
+    await openWith("Mixed shift project", e, [[-10, -6, 5], [24, 28, 2]]);
+    const byTitle = Object.fromEntries((await listEventProjects(db, e)).map((p) => [p.title, p]));
+    const ended = byTitle["Ended shift project"];
+    expect(ended.spotsLeft).toBe(0);
+    expect(ended.needs[0]).toMatchObject({ ended: true, spotsLeft: 0, slotsNeeded: 5 });
+    const mixed = byTitle["Mixed shift project"];
+    expect(mixed.spotsLeft).toBe(2);
+    expect(mixed.needs.map((n) => [n.ended, n.spotsLeft])).toEqual([[true, 0], [false, 2]]);
+  });
+
+  it("says who removed a link, so the page never blames the wrong person", async () => {
+    const p = await project();
+    await linkProjectToEvent(db, u.editor, p, ev.buncombe);
+    await linkProjectToEvent(db, u.editor, p, ev.second);
+    await linkProjectToEvent(db, u.editor, p, ev.recovery);
+    await unlinkProjectFromEvent(db, u.editor, p, ev.second);
+    await unlinkProjectFromEvent(db, u.caB, p, ev.recovery);
+    const links = Object.fromEntries((await listProjectEventLinks(db, u.viewer, p)).map((l) => [l.eventId, l]));
+    expect(links[ev.buncombe].dismissedBy).toBeNull();
+    expect(links[ev.second].dismissedBy).toBe("ORG");
+    expect(links[ev.recovery].dismissedBy).toBe("ADMIN");
+  });
+
+  it("offers Restore only when it would succeed", async () => {
+    const p = await project("DRAFT", { zip: "28801" });
+    await linkProjectToEvent(db, u.admin, p, ev.zip28801);
+    await unlinkProjectFromEvent(db, u.admin, p, ev.zip28801);
+    const row = async () => (await listProjectEventLinks(db, u.admin, p)).find((l) => l.eventId === ev.zip28801)!;
+    expect(await row()).toMatchObject({ state: "DISMISSED", canRelink: true, inArea: true });
+    await sys((tx) => tx.query(`UPDATE projects SET zip = '28806' WHERE id = $1`, [p]));
+    expect(await row()).toMatchObject({ state: "DISMISSED", canRelink: false, inArea: false });
+    await expect(linkProjectToEvent(db, u.admin, p, ev.zip28801)).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("does not let a member of the owning org act as an administrator on its own project", async () => {
+    // A county administrator who is only a VIEWER of the owning org may not decide about that org's project links,
+    // matching the rule that nobody reviews their own organization's project.
+    const viewerAdmin = await makeUser(db, "viewer-admin-link@example.test");
+    await sys((tx) => tx.query(`INSERT INTO organization_memberships (org_id, user_id, role, status) VALUES ($1, $2, 'VIEWER', 'ACTIVE')`, [orgA, viewerAdmin]));
+    await assignCountyAdmin(db, exec, { email: "viewer-admin-link@example.test", countyId: buncombe, reason: "Viewer who is also coordinator" });
+    const p = await project();
+    await linkProjectToEvent(db, u.editor, p, ev.buncombe);
+    await unlinkProjectFromEvent(db, u.caB, p, ev.buncombe);
+    await expect(linkProjectToEvent(db, viewerAdmin, p, ev.buncombe)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(unlinkProjectFromEvent(db, viewerAdmin, p, ev.second)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await listLinkableEvents(db, viewerAdmin, p)).toEqual([]);
+    expect((await linkRow(p, ev.buncombe)).state).toBe("DISMISSED");
+    // Administrators who are not members still can.
+    await expect(linkProjectToEvent(db, u.caB, p, ev.buncombe)).resolves.toBeUndefined();
   });
 });

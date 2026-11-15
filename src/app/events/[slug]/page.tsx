@@ -4,13 +4,11 @@ import { notFound } from "next/navigation";
 import { EventStatusBadge, HAZARD_LABELS } from "@/components/event-status";
 import { AvailabilityBadge } from "@/components/status";
 import { getDriver } from "@/server/db";
+import { formatShift } from "@/lib/shift";
 import { listEventProjects } from "@/server/modules/eventlinks";
 import { getEventHelp, getPublicEvent } from "@/server/modules/events";
 
 export const dynamic = "force-dynamic";
-
-const fmtShift = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" }) : null;
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -102,8 +100,8 @@ export default async function EventPage({ params }: Params) {
                         <span className="font-medium">{n.title}</span>
                         {n.urgency === "URGENT" && <span className="text-bad"> · urgent</span>}
                         <span className="text-muted">
-                          {" · "}{n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : "Full"}
-                          {(n.startsAt || n.endsAt) && <> · {fmtShift(n.startsAt)} to {fmtShift(n.endsAt)} (Eastern Time)</>}
+                          {" · "}{n.ended ? "Shift ended" : n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : "Full"}
+                          {formatShift(n.startsAt, n.endsAt) && <> · {formatShift(n.startsAt, n.endsAt)}</>}
                         </span>
                       </li>
                     ))}
