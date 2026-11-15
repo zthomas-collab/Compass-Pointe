@@ -214,3 +214,107 @@ export async function listOrgProjects(driver: Driver, userId: string, orgId: str
     return rows.map((r) => toProject(r, []));
   });
 }
+
+// An empty form field means "no shift time"; anything else must parse as a date and is normalized to ISO.
+const optShift = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+  z
+    .string()
+    .trim()
+    .optional()
+    .refine((v) => v === undefined || !Number.isNaN(Date.parse(v)), "Enter a valid date and time")
+    .transform((v) => (v === undefined ? undefined : new Date(v).toISOString())),
+);
+
+export const needSchema = z
+  .object({
+    title: z.string().trim().min(3).max(120),
+    details: optText(1000),
+    urgency: z.enum(["NORMAL", "URGENT"]).default("NORMAL"),
+    slotsNeeded: z.coerce.number().int("Use a whole number").min(1, "At least 1").max(500, "At most 500"),
+    startsAt: optShift,
+    endsAt: optShift,
+    skills: optText(200),
+    instructions: optText(1000),
+  })
+  .refine((n) => !n.startsAt || !n.endsAt || Date.parse(n.endsAt) > Date.parse(n.startsAt), {
+    message: "The shift must end after it starts",
+    path: ["endsAt"],
+  });
+
+const needValues = (n: z.infer<typeof needSchema>) => [
+  n.title, n.details ?? null, n.urgency, n.slotsNeeded, n.startsAt ?? null, n.endsAt ?? null, n.skills ?? null, n.instructions ?? null,
+];
+
+/** Org editor: add a people need. An OPEN or PAUSED project goes back to PENDING_REVIEW. */
+export async function addNeed(driver: Driver, userId: string, projectId: string, raw: unknown): Promise<string> {
+  const id = uuid(projectId);
+  const input = parseOrThrow(needSchema, raw);
+  try {
+    return await runIn(driver, { kind: "system" }, async (tx) => {
+      const p = await lockEditableProject(tx, userId, id);
+      const rows = await tx.query<{ id: string }>(
+        `INSERT INTO project_needs (project_id, title, details, urgency, slots_needed, starts_at, ends_at, skills, instructions)
+         VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8, $9) RETURNING id`,
+        [id, ...needValues(input)],
+      );
+      await tx.query(`UPDATE projects SET ${REVIEW_RESET} WHERE id = $1`, [id]);
+      await writeAudit(tx, {
+        actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_NEED_ADDED", subjectType: "project", subjectId: id,
+        details: { needId: rows[0].id, from: p.status },
+      });
+      return rows[0].id;
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+async function projectOfNeed(tx: Tx, needId: string): Promise<string> {
+  const rows = await tx.query<{ project_id: string }>(`SELECT project_id FROM project_needs WHERE id = $1`, [needId]);
+  if (!rows.length) throw new AppError("NOT_FOUND", "Need not found.");
+  return rows[0].project_id;
+}
+
+/** Org editor: replace a need's details. An OPEN or PAUSED project goes back to PENDING_REVIEW. */
+export async function updateNeed(driver: Driver, userId: string, needId: string, raw: unknown): Promise<void> {
+  const id = uuid(needId);
+  const input = parseOrThrow(needSchema, raw);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const projectId = await projectOfNeed(tx, id);
+      const p = await lockEditableProject(tx, userId, projectId);
+      await tx.query(
+        `UPDATE project_needs SET title = $2, details = $3, urgency = $4, slots_needed = $5, starts_at = $6::timestamptz,
+                ends_at = $7::timestamptz, skills = $8, instructions = $9 WHERE id = $1`,
+        [id, ...needValues(input)],
+      );
+      await tx.query(`UPDATE projects SET ${REVIEW_RESET} WHERE id = $1`, [projectId]);
+      await writeAudit(tx, {
+        actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_NEED_UPDATED", subjectType: "project", subjectId: projectId,
+        details: { needId: id, from: p.status },
+      });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+/** Org editor: remove a need. An OPEN or PAUSED project goes back to PENDING_REVIEW. */
+export async function removeNeed(driver: Driver, userId: string, needId: string): Promise<void> {
+  const id = uuid(needId);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const projectId = await projectOfNeed(tx, id);
+      const p = await lockEditableProject(tx, userId, projectId);
+      await tx.query(`DELETE FROM project_needs WHERE id = $1`, [id]);
+      await tx.query(`UPDATE projects SET ${REVIEW_RESET} WHERE id = $1`, [projectId]);
+      await writeAudit(tx, {
+        actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_NEED_REMOVED", subjectType: "project", subjectId: projectId,
+        details: { needId: id, from: p.status },
+      });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
-import { createProject, getProjectForEditor, listOrgProjects, updateProject } from "@/server/modules/projects";
+import { addNeed, createProject, getProjectForEditor, listOrgProjects, removeNeed, updateNeed, updateProject } from "@/server/modules/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
 
@@ -122,5 +122,93 @@ describe("project creation and editing", () => {
   it("hides projects from request roles at the database", async () => {
     await expect(runIn(db, { kind: "anon" }, (tx) => tx.query(`SELECT * FROM projects`))).rejects.toMatchObject({ code: "42501" });
     await expect(runIn(db, { kind: "anon" }, (tx) => tx.query(`SELECT * FROM project_needs`))).rejects.toMatchObject({ code: "42501" });
+  });
+});
+
+describe("people needs", () => {
+  const need = (over: Record<string, unknown> = {}) => ({
+    title: "Debris removal crew",
+    details: "Carry debris to the curb",
+    urgency: "URGENT",
+    slotsNeeded: 6,
+    startsAt: "2026-12-06T08:00:00Z",
+    endsAt: "2026-12-06T12:00:00Z",
+    skills: "Strong back, work gloves",
+    instructions: "Park on Elm Street",
+    ...over,
+  });
+  const mk = (title = "Project for needs tests") => createProject(db, u.admin, orgA, base({ title }));
+  const needs = async (id: string) => (await getProjectForEditor(db, u.admin, id))!.needs;
+  const status = async (id: string) => (await getProjectForEditor(db, u.admin, id))!.status;
+  const force = (id: string, to: string) => sys((tx) => tx.query(`UPDATE projects SET status = $2 WHERE id = $1`, [id, to]));
+  const audited = async (id: string, action: string) =>
+    (await sys((tx) => tx.query(`SELECT 1 FROM audit_logs WHERE action = $1 AND subject_id = $2`, [action, id]))).length;
+
+  it("adds, edits and removes needs on a draft, and audits each", async () => {
+    const id = await mk();
+    const n = await addNeed(db, u.editor, id, need());
+    expect(await needs(id)).toMatchObject([{ id: n, title: "Debris removal crew", slotsNeeded: 6, urgency: "URGENT" }]);
+    await updateNeed(db, u.editor, n, need({ title: "Debris crew leads", slotsNeeded: "8" }));
+    expect(await needs(id)).toMatchObject([{ title: "Debris crew leads", slotsNeeded: 8 }]);
+    await removeNeed(db, u.editor, n);
+    expect(await needs(id)).toEqual([]);
+    expect(await audited(id, "PROJECT_NEED_ADDED")).toBe(1);
+    expect(await audited(id, "PROJECT_NEED_UPDATED")).toBe(1);
+    expect(await audited(id, "PROJECT_NEED_REMOVED")).toBe(1);
+  });
+
+  it("rejects bad slot counts and shifts that end before they start", async () => {
+    const id = await mk("Project for bad needs");
+    for (const slotsNeeded of [0, -3, 501, 1.5, "abc"]) {
+      await expect(addNeed(db, u.admin, id, need({ slotsNeeded }))).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    await expect(addNeed(db, u.admin, id, need({ startsAt: "2026-12-06T08:00:00Z", endsAt: "2026-12-06T07:00:00Z" }))).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(addNeed(db, u.admin, id, need({ startsAt: "not a date" }))).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(await needs(id)).toEqual([]);
+  });
+
+  it("sends an OPEN project back to review when a need changes", async () => {
+    const a = await mk("Open project add need");
+    await force(a, "OPEN");
+    await addNeed(db, u.admin, a, need());
+    expect(await status(a)).toBe("PENDING_REVIEW");
+
+    const b = await mk("Open project edit need");
+    const nb = await addNeed(db, u.admin, b, need());
+    await force(b, "OPEN");
+    await updateNeed(db, u.admin, nb, need({ slotsNeeded: 9 }));
+    expect(await status(b)).toBe("PENDING_REVIEW");
+
+    const c = await mk("Paused project remove need");
+    const nc = await addNeed(db, u.admin, c, need());
+    await force(c, "PAUSED");
+    await removeNeed(db, u.admin, nc);
+    expect(await status(c)).toBe("PENDING_REVIEW");
+  });
+
+  it("refuses need changes by viewers and other orgs, and on closed projects", async () => {
+    const id = await mk("Project for forbidden needs");
+    const n = await addNeed(db, u.admin, id, need());
+    for (const who of [u.viewer, u.other, u.caH, u.plain]) {
+      await expect(addNeed(db, who, id, need())).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(updateNeed(db, who, n, need())).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(removeNeed(db, who, n)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    for (const closed of ["COMPLETED", "PENDING_REVIEW"]) {
+      await force(id, closed);
+      await expect(addNeed(db, u.admin, id, need())).rejects.toMatchObject({ code: "VALIDATION" });
+      await expect(updateNeed(db, u.admin, n, need())).rejects.toMatchObject({ code: "VALIDATION" });
+      await expect(removeNeed(db, u.admin, n)).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(await needs(id)).toHaveLength(1);
+    await expect(removeNeed(db, u.admin, "00000000-0000-0000-0000-000000000000")).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("returns needs in shift order, unscheduled last", async () => {
+    const id = await mk("Project for ordering needs");
+    await addNeed(db, u.admin, id, need({ title: "No shift set", startsAt: "", endsAt: "" }));
+    await addNeed(db, u.admin, id, need({ title: "Later shift", startsAt: "2026-12-07T08:00:00Z", endsAt: "2026-12-07T12:00:00Z" }));
+    await addNeed(db, u.admin, id, need({ title: "Earlier shift", startsAt: "2026-12-06T08:00:00Z", endsAt: "2026-12-06T12:00:00Z" }));
+    expect((await needs(id)).map((n) => n.title)).toEqual(["Earlier shift", "Later shift", "No shift set"]);
   });
 });
