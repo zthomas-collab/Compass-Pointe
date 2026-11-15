@@ -6,6 +6,7 @@ import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
 import { easternLocalToIso, type ProjectStatus } from "@/lib/projects";
 import { addNeed, createProject, removeNeed, setProjectStatus, submitProject, updateNeed, updateProject } from "@/server/modules/projects";
+import { markAttendance } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
 
@@ -97,6 +98,18 @@ export async function submitProjectAction(projectId: string): Promise<FormState>
   }
   refresh(projectId);
   return { ok: true, message: "Sent for review." };
+}
+
+/** Bound as (projectId, commitmentId, to); React's extra (prev, form) arguments are ignored. */
+export async function markAttendanceAction(projectId: string, commitmentId: string, to: "ATTENDED" | "NO_SHOW" | "CANCELLED"): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await markAttendance(await getDriver(), user.id, commitmentId, to);
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(projectId);
+  return { ok: true, message: "Updated." };
 }
 
 export async function setProjectStatusAction(projectId: string, to: ProjectStatus): Promise<FormState> {

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   addNeedAction,
+  markAttendanceAction,
   removeNeedAction,
   setProjectStatusAction,
   submitProjectAction,
@@ -15,13 +16,24 @@ import { PROJECT_AUDIENCE_LABELS, type ProjectStatus } from "@/lib/projects";
 import { getDriver } from "@/server/db";
 import { listCounties } from "@/server/modules/counties";
 import { getOrganizationProfile } from "@/server/modules/directory";
+import { AppError } from "@/server/errors";
 import { getProjectForEditor } from "@/server/modules/projects";
+import { listRoster, type RosterRow } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Project", robots: { index: false } };
 export const dynamic = "force-dynamic";
 
 const EDITABLE: ProjectStatus[] = ["DRAFT", "OPEN", "PAUSED"];
+/** Attendance can be recorded once a shift has started (or has no start time). */
+const hasStarted = (startsAt: string | null) => startsAt === null || Date.parse(startsAt) <= Date.now();
+const ROSTER_STATUS: Record<RosterRow["status"], { label: string; tone: string; icon: string }> = {
+  PENDING_EMAIL: { label: "Waiting to confirm", tone: "tone-warn", icon: "⏳" },
+  CONFIRMED: { label: "Confirmed", tone: "tone-ok", icon: "✓" },
+  CANCELLED: { label: "Cancelled", tone: "tone-muted", icon: "✕" },
+  ATTENDED: { label: "Attended", tone: "tone-brand", icon: "●" },
+  NO_SHOW: { label: "No-show", tone: "tone-bad", icon: "!" },
+};
 const fmtShift = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" }) : null;
 
@@ -38,6 +50,13 @@ export default async function ProjectEditorPage({
   const db = await getDriver();
   const project = await getProjectForEditor(db, user.id, id);
   if (!project) notFound();
+  // The roster holds volunteers' contact details: only org editors, the county's administrators and executives get it.
+  let roster: RosterRow[] | null = null;
+  try {
+    roster = await listRoster(db, user.id, id);
+  } catch (err) {
+    if (!(err instanceof AppError && err.code === "FORBIDDEN")) throw err;
+  }
   const editing = project.canEdit && EDITABLE.includes(project.status);
   let counties: Awaited<ReturnType<typeof listCounties>> = [];
   if (editing) {
@@ -98,7 +117,11 @@ export default async function ProjectEditorPage({
               {editing ? (
                 <>
                   <NeedForm action={updateNeedAction.bind(null, project.id, n.id)} need={n} submitLabel="Save role" />
-                  <div className="mt-2"><ActionButton action={removeNeedAction.bind(null, project.id, n.id)} label="Remove this role" /></div>
+                  {roster?.some((r) => r.needId === n.id) ? (
+                    <p className="mt-2 text-sm text-muted">Volunteers have signed up for this role, so it cannot be removed. Its slots can still be increased.</p>
+                  ) : (
+                    <div className="mt-2"><ActionButton action={removeNeedAction.bind(null, project.id, n.id)} label="Remove this role" /></div>
+                  )}
                 </>
               ) : (
                 <div className="text-sm">
@@ -119,6 +142,52 @@ export default async function ProjectEditorPage({
           </div>
         )}
       </section>
+
+      {roster && (
+        <section className="mt-5" aria-labelledby="roster-h">
+          <h2 id="roster-h" className="text-lg font-semibold">Volunteers</h2>
+          <p className="mt-1 text-sm text-muted">
+            These people agreed to share their contact details with {project.orgName} for this project. Treat them as private.
+          </p>
+          {project.needs.map((n) => {
+            const rows = roster.filter((r) => r.needId === n.id);
+            const holding = rows.filter((r) => r.status === "PENDING_EMAIL" || r.status === "CONFIRMED" || r.status === "ATTENDED").length;
+            return (
+              <div key={n.id} className="card mt-3 p-4">
+                <h3 className="font-semibold">{n.title} <span className="text-sm font-normal text-muted">· {holding} of {n.slotsNeeded} spots taken</span></h3>
+                {(n.startsAt || n.endsAt) && <p className="text-sm text-muted">{fmtShift(n.startsAt)} to {fmtShift(n.endsAt)} (Eastern Time)</p>}
+                <ul className="mt-2 divide-y divide-line">
+                  {rows.map((r) => {
+                    const st = ROSTER_STATUS[r.status];
+                    return (
+                      <li key={r.id} className="grid gap-2 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                        <div>
+                          <p className="font-medium">{r.volunteerName} <span className={`badge ${st.tone}`}><span aria-hidden="true">{st.icon}</span> {st.label}</span></p>
+                          <p className="text-sm text-muted">{r.email}{r.phone ? ` · ${r.phone}` : ""}</p>
+                        </div>
+                        {project.canEdit && (
+                          <div className="flex flex-wrap gap-2">
+                            {r.status === "CONFIRMED" && hasStarted(n.startsAt) && (
+                              <>
+                                <ActionButton action={markAttendanceAction.bind(null, project.id, r.id, "ATTENDED")} label="Attended" className="btn btn-primary" />
+                                <ActionButton action={markAttendanceAction.bind(null, project.id, r.id, "NO_SHOW")} label="No-show" />
+                              </>
+                            )}
+                            {(r.status === "PENDING_EMAIL" || r.status === "CONFIRMED") && (
+                              <ActionButton action={markAttendanceAction.bind(null, project.id, r.id, "CANCELLED")} label="Remove" />
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                  {rows.length === 0 && <li className="py-3 text-sm text-muted">Nobody has signed up yet.</li>}
+                </ul>
+              </div>
+            );
+          })}
+        </section>
+      )}
     </div>
   );
 }
