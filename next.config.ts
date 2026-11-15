@@ -27,8 +27,13 @@ const nextConfig: NextConfig = {
   experimental: { serverActions: { bodySizeLimit: "6mb" } },
   outputFileTracingIncludes: { "/**": ["./db/migrations/**"] },
   async redirects() {
-    // "Black Book" was renamed to "Contacts".
-    return [{ source: "/black-book", destination: "/contacts", permanent: true }];
+    return [
+      // "Black Book" was renamed to "Contacts".
+      { source: "/black-book", destination: "/contacts", permanent: true },
+      // Volunteer shifts now live inside the Volunteer & donate section. The query string is carried over automatically.
+      { source: "/projects", destination: "/volunteer/projects", permanent: true },
+      { source: "/projects/:id", destination: "/volunteer/projects/:id", permanent: true },
+    ];
   },
   async headers() {
     return [

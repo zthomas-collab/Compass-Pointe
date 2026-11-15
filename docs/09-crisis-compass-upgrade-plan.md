@@ -102,7 +102,7 @@ Rules that are enforced and tested: authorization is re-derived from the databas
 
 1. Deploy and run `npm run db:migrate` (migration 0008 is additive; see backward-compatibility note above). Take a database backup first.
 2. Optional branding (all validated; a malformed or low-contrast value is ignored with a logged warning):
-   `BRAND_NAME`, `BRAND_TAGLINE`, `BRAND_OPERATOR`, `BRAND_LOGO_PATH` (a file under `/public`, e.g. `/brand/logo.svg`), `BRAND_COLOR_PRIMARY`, `BRAND_COLOR_INTERACTIVE`, `BRAND_COLOR_LINK`, `BRAND_COLOR_SOFT`, `BRAND_COLOR_ACCENT`, `BRAND_COLOR_BACKGROUND`, `BRAND_COLOR_TEXT` (each `#rrggbb`).
+   `BRAND_NAME`, `BRAND_TAGLINE`, `BRAND_LOGO_PATH` (a file under `/public`, e.g. `/brand/logo.svg`), `BRAND_COLOR_PRIMARY`, `BRAND_COLOR_INTERACTIVE`, `BRAND_COLOR_LINK`, `BRAND_COLOR_SOFT`, `BRAND_COLOR_ACCENT`, `BRAND_COLOR_BACKGROUND`, `BRAND_COLOR_TEXT` (each `#rrggbb`).
 3. The first executive is created with `npm run admin:grant -- <email> PLATFORM_ADMIN "<reason>"`. The executive then adds counties and assigns county administrators at `/admin/counties`.
 4. Executives and county administrators need MFA wherever enforcement is on (always in production), so managed auth must land before production use.
 5. Organization administrators then pick the counties they serve and add links and a logo at `/dashboard/orgs/<id>/profile`; an administrator approves the profile at `/admin/profiles` (the first approval happens automatically when the organization itself is verified).

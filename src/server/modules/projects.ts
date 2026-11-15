@@ -486,6 +486,8 @@ export type PublicNeed = {
   slotsNeeded: number;
   /** Real count of confirmed, attended, and unexpired-pending sign-ups. */
   slotsTaken: number;
+  /** The shift's end time has passed: no spots are offered. */
+  ended: boolean;
   spotsLeft: number;
   startsAt: string | null;
   endsAt: string | null;
@@ -542,13 +544,17 @@ type DbPublicNeed = {
   slots_taken: number; starts_at: Date | null; ends_at: Date | null; skills: string | null;
 };
 
-const toPublicNeed = (n: DbPublicNeed): PublicNeed => ({
-  id: n.id, title: n.title, details: n.details, urgency: n.urgency, slotsNeeded: n.slots_needed,
-  slotsTaken: n.slots_taken, spotsLeft: Math.max(0, n.slots_needed - n.slots_taken),
-  startsAt: n.starts_at ? new Date(n.starts_at).toISOString() : null,
-  endsAt: n.ends_at ? new Date(n.ends_at).toISOString() : null,
-  skills: n.skills,
-});
+const toPublicNeed = (n: DbPublicNeed): PublicNeed => {
+  // A shift that has ended offers no spots (sign-up is refused for it), whatever its slot arithmetic says.
+  const ended = n.ends_at !== null && new Date(n.ends_at).getTime() <= Date.now();
+  return {
+    id: n.id, title: n.title, details: n.details, urgency: n.urgency, slotsNeeded: n.slots_needed,
+    slotsTaken: n.slots_taken, ended, spotsLeft: ended ? 0 : Math.max(0, n.slots_needed - n.slots_taken),
+    startsAt: n.starts_at ? new Date(n.starts_at).toISOString() : null,
+    endsAt: n.ends_at ? new Date(n.ends_at).toISOString() : null,
+    skills: n.skills,
+  };
+};
 
 export async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<string, PublicNeed[]>> {
   const out = new Map<string, PublicNeed[]>();

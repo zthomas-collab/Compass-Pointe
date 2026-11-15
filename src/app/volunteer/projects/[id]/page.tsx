@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { SignUpForm } from "@/components/signup-forms";
+import { Breadcrumb, VolunteerSectionNav } from "@/components/volunteer-nav";
 import { PROJECT_AUDIENCE_LABELS } from "@/lib/projects";
+import { formatShift } from "@/lib/shift";
+import { VOLUNTEER_PATHS } from "@/lib/volunteer-paths";
 import { signUpAction } from "../signup-actions";
 import { getDriver } from "@/server/db";
 import { getPublicOrganization } from "@/server/modules/directory";
@@ -12,12 +15,6 @@ import { getPublicProject } from "@/server/modules/projects";
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
-
-const fmtShift = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" }) : null;
-
-/** True when a shift's end time has passed (the service refuses sign-ups for it, so the page hides the form). */
-const hasEnded = (endsAt: string | null) => endsAt !== null && Date.parse(endsAt) <= Date.now();
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { id } = await params;
@@ -35,8 +32,14 @@ export default async function ProjectPage({ params }: Params) {
   const orgProfile = await getPublicOrganization(db, project.orgId);
   const events = await listPublicProjectEvents(db, project.id);
   return (
+    <>
+    <VolunteerSectionNav current="shifts" />
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
-      <Link href="/projects" className="text-sm text-brand underline">← All projects</Link>
+      <Breadcrumb items={[
+        { label: "Volunteer & donate", href: VOLUNTEER_PATHS.hub },
+        { label: "Find a shift", href: VOLUNTEER_PATHS.shifts },
+        { label: project.title },
+      ]} />
       <h1 className="mt-2 text-3xl">{project.title}</h1>
       <p className="mt-1 text-sm text-muted">
         {orgProfile ? <Link className="underline" href={`/orgs/${project.orgId}`}>{project.orgName}</Link> : project.orgName}
@@ -64,24 +67,28 @@ export default async function ProjectPage({ params }: Params) {
               <p className="flex flex-wrap items-center gap-2 font-semibold">
                 {n.title}
                 <span className={`badge ${n.spotsLeft > 0 ? "tone-brand" : "tone-muted"}`}>
-                  {n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : `Full (${n.slotsNeeded} of ${n.slotsNeeded})`}
+                  {n.ended ? "Shift ended" : n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : `Full (${n.slotsNeeded} of ${n.slotsNeeded})`}
                 </span>
                 {n.urgency === "URGENT" && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent</span>}
               </p>
-              {(n.startsAt || n.endsAt) && <p className="text-sm text-muted">{fmtShift(n.startsAt)} to {fmtShift(n.endsAt)} (Eastern Time)</p>}
+              {formatShift(n.startsAt, n.endsAt) && <p className="text-sm text-muted">{formatShift(n.startsAt, n.endsAt)}</p>}
               {n.skills && <p className="text-sm text-muted">Skills or what to bring: {n.skills}</p>}
               {n.details && <p className="mt-1 whitespace-pre-line text-sm">{n.details}</p>}
-              {n.spotsLeft > 0 && !hasEnded(n.endsAt) ? (
+              {n.spotsLeft > 0 && !n.ended ? (
                 <div className="mt-3 border-t border-line pt-3">
                   <SignUpForm action={signUpAction.bind(null, n.id)} orgName={project.orgName} />
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-muted">{n.spotsLeft > 0 ? "This shift has ended." : "This role is full right now. Spots open up when someone cancels."}</p>
+                <p className="mt-2 text-sm text-muted">{n.ended ? "This shift has ended." : "This role is full right now. Spots open up when someone cancels."}</p>
               )}
             </li>
           ))}
         </ul>
+        <p className="mt-6 text-sm">
+          <Link className="underline" href={VOLUNTEER_PATHS.shifts}>← See all shifts</Link>
+        </p>
       </section>
     </div>
+    </>
   );
 }

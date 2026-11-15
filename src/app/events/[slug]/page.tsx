@@ -4,13 +4,12 @@ import { notFound } from "next/navigation";
 import { EventStatusBadge, HAZARD_LABELS } from "@/components/event-status";
 import { AvailabilityBadge } from "@/components/status";
 import { getDriver } from "@/server/db";
+import { formatShift } from "@/lib/shift";
+import { shiftPath } from "@/lib/volunteer-paths";
 import { listEventProjects } from "@/server/modules/eventlinks";
 import { getEventHelp, getPublicEvent } from "@/server/modules/events";
 
 export const dynamic = "force-dynamic";
-
-const fmtShift = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" }) : null;
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -88,7 +87,7 @@ export default async function EventPage({ params }: Params) {
             <ul className="mt-3 grid gap-3">
               {projects.map((p) => (
                 <li key={p.id} className="card p-4">
-                  <Link className="text-lg font-semibold text-brand underline" href={`/projects/${p.id}`}>{p.title}</Link>
+                  <Link className="text-lg font-semibold text-brand underline" href={shiftPath(p.id)}>{p.title}</Link>
                   <p className="mt-1 flex flex-wrap items-center gap-2 text-sm">
                     {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent need</span>}
                     <span className={`badge ${p.spotsLeft > 0 ? "tone-brand" : "tone-muted"}`}>
@@ -102,8 +101,8 @@ export default async function EventPage({ params }: Params) {
                         <span className="font-medium">{n.title}</span>
                         {n.urgency === "URGENT" && <span className="text-bad"> · urgent</span>}
                         <span className="text-muted">
-                          {" · "}{n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : "Full"}
-                          {(n.startsAt || n.endsAt) && <> · {fmtShift(n.startsAt)} to {fmtShift(n.endsAt)} (Eastern Time)</>}
+                          {" · "}{n.ended ? "Shift ended" : n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : "Full"}
+                          {formatShift(n.startsAt, n.endsAt) && <> · {formatShift(n.startsAt, n.endsAt)}</>}
                         </span>
                       </li>
                     ))}

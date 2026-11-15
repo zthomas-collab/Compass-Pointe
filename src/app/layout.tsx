@@ -64,7 +64,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <Link href="/" className={navLink}>Map</Link>
             <Link href="/contacts" className={navLink}>Contacts</Link>
             <Link href="/events" className={navLink}>Events</Link>
-            <Link href="/projects" className={navLink}>Projects</Link>
             <Link href="/assistance" className={navLink}>Request help</Link>
             <Link href="/volunteer" className={navLink}>Volunteer &amp; donate</Link>
             <Link href="/safety" className={navLink}>Safety</Link>
@@ -89,7 +88,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </header>
         <main id="main" className="flex flex-1 flex-col">{children}</main>
         <footer className="border-t border-line bg-surface px-4 py-3 text-center text-xs text-muted">
-          <strong className="text-ink">{brand.name}</strong> is operated by {brand.operator}. Information is provided by
+          <strong className="text-ink">{brand.name}</strong> is a nonprofit. Information is provided by
           participating organizations — always check timestamps. Road and resource reports are not official government
           notices. <Link className="text-brand underline" href="/safety">Safety &amp; corrections</Link>
         </footer>

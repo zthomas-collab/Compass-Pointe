@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
 import { easternLocalToIso, type ProjectStatus } from "@/lib/projects";
+import { VOLUNTEER_PATHS, shiftPath } from "@/lib/volunteer-paths";
 import { addNeed, createProject, removeNeed, setProjectStatus, submitProject, updateNeed, updateProject } from "@/server/modules/projects";
 import { linkProjectToEvent, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
 import { markAttendance } from "@/server/modules/volunteers";
@@ -29,8 +30,9 @@ function refresh(projectId: string) {
   revalidatePath(`/dashboard/projects/${projectId}`);
   revalidatePath("/dashboard");
   revalidatePath("/admin/projects");
-  revalidatePath("/projects");
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(VOLUNTEER_PATHS.hub);
+  revalidatePath(VOLUNTEER_PATHS.shifts);
+  revalidatePath(shiftPath(projectId));
 }
 
 export async function createProjectAction(orgId: string, _prev: FormState, form: FormData): Promise<FormState> {

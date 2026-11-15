@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DAILY_SIGNUP_LIMIT, HOLD_HOURS, type CommitmentStatus } from "@/lib/volunteers";
+import { VOLUNTEER_PATHS } from "@/lib/volunteer-paths";
 import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
@@ -223,7 +224,7 @@ async function enqueueNotice(tx: Tx, to: string, projectTitle: string, needTitle
     kind: "VOLUNTEER_NOTICE",
     to,
     subject: `${brandName()}: your volunteer sign-up was cancelled`,
-    body: `${body}\n\nYou can find other shifts at ${appBaseUrl()}/projects`,
+    body: `${body}\n\nYou can find other shifts at ${appBaseUrl()}${VOLUNTEER_PATHS.shifts}`,
   });
 }
 

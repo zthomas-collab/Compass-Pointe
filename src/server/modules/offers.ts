@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { OFFER_TYPES, OFFER_TYPE_LABELS, type OfferType } from "@/lib/offers";
 import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
@@ -14,23 +15,8 @@ import { countiesForZip, zipMatchesCounty } from "./zipcounty";
  * notification queue. Contributor contact details are never put in email to staff, only in the dashboard.
  */
 
-export const OFFER_TYPES = [
-  "VOLUNTEER_LABOR", "PROFESSIONAL_SKILLS", "EQUIPMENT", "TRANSPORTATION", "DRINKING_WATER", "FOOD",
-  "BUILDING_SUPPLIES", "CLEANING_SUPPLIES", "STORAGE_SPACE", "OTHER",
-] as const;
-export type OfferType = (typeof OFFER_TYPES)[number];
-export const OFFER_TYPE_LABELS: Record<OfferType, string> = {
-  VOLUNTEER_LABOR: "Volunteer labor",
-  PROFESSIONAL_SKILLS: "Professional skills",
-  EQUIPMENT: "Equipment",
-  TRANSPORTATION: "Transportation",
-  DRINKING_WATER: "Drinking water",
-  FOOD: "Food",
-  BUILDING_SUPPLIES: "Building supplies",
-  CLEANING_SUPPLIES: "Cleaning supplies",
-  STORAGE_SPACE: "Storage or staging space",
-  OTHER: "Something else",
-};
+// The offer types and their labels live in a client-safe file so the donate pages and form can share them.
+export { OFFER_TYPES, OFFER_TYPE_LABELS, type OfferType };
 
 export const OFFER_STATUSES = ["SUBMITTED", "REVIEWED", "MATCHED", "ACCEPTED", "SCHEDULED", "COMPLETED", "DECLINED", "CANCELED", "EXPIRED"] as const;
 export type OfferStatus = (typeof OFFER_STATUSES)[number];

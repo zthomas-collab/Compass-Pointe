@@ -38,7 +38,9 @@ export async function projectInEventArea(tx: Tx, projectId: string, eventId: str
  */
 export async function decisionRole(tx: Tx, userId: string, project: { org_id: string; county_id: string; org_ok: boolean }): Promise<DecisionRole | null> {
   const role = await membershipRole(tx, project.org_id, userId);
-  if ((role === "ORG_ADMIN" || role === "EDITOR") && project.org_ok) return "ORG";
+  // A member of the owning org decides as the organization or not at all: being a county administrator as well does not
+  // let them override their own organization's project (the same rule as reviewing a project).
+  if (role) return (role === "ORG_ADMIN" || role === "EDITOR") && project.org_ok ? "ORG" : null;
   const access = await loadAccess(tx, userId);
   return canManageCounty(access, project.county_id) ? "ADMIN" : null;
 }
@@ -65,7 +67,8 @@ export async function linkProjectToEvent(driver: Driver, userId: string, project
   try {
     await runIn(driver, { kind: "system" }, async (tx) => {
       const p = await lockProject(tx, pid);
-      const ev = await tx.query<{ status: string }>(`SELECT status FROM events WHERE id = $1`, [eid]);
+      // FOR SHARE: an event cannot be closed between this check and the insert, which would leave a link to a closed event.
+      const ev = await tx.query<{ status: string }>(`SELECT status FROM events WHERE id = $1 FOR SHARE`, [eid]);
       if (!ev.length) throw new AppError("NOT_FOUND", "Event not found.");
       const role = await decisionRole(tx, userId, p);
       if (!role) throw new AppError("FORBIDDEN", "You cannot change this project's events.");
@@ -130,11 +133,13 @@ export type ProjectEventLink = {
   eventSlug: string;
   eventStatus: EventStatus;
   state: "CONFIRMED" | "DISMISSED";
+  /** For a dismissed link: who removed it (so a page never blames the wrong person). Null while confirmed. */
+  dismissedBy: DecisionRole | null;
   /** Is the project inside the event's area right now? (Editing a project or an event can move it out.) */
   inArea: boolean;
   /** The reader may take a confirmed link off. */
   canUnlink: boolean;
-  /** The reader may put a dismissed link back, and it would succeed. */
+  /** The reader may put a dismissed link back, and doing so would succeed right now (area, event and project status included). */
   canRelink: boolean;
 };
 
@@ -172,11 +177,13 @@ export async function listProjectEventLinks(driver: Driver, userId: string, proj
     const out: ProjectEventLink[] = [];
     for (const r of rows) {
       const open = r.status === "ACTIVE" || r.status === "RECOVERY";
+      const inArea = await projectInEventArea(tx, projectId, r.event_id);
       out.push({
         eventId: r.event_id, eventName: r.name, eventSlug: r.slug, eventStatus: r.status, state: r.state,
-        inArea: await projectInEventArea(tx, projectId, r.event_id),
+        dismissedBy: r.state === "DISMISSED" ? (r.decided_by_role as DecisionRole | null) : null,
+        inArea,
         canUnlink: r.state === "CONFIRMED" && role !== null,
-        canRelink: r.state === "DISMISSED" && role !== null && open && !finished(p.status) && (r.decided_by_role !== "ADMIN" || role === "ADMIN"),
+        canRelink: r.state === "DISMISSED" && role !== null && open && inArea && !finished(p.status) && (r.decided_by_role !== "ADMIN" || role === "ADMIN"),
       });
     }
     return out;

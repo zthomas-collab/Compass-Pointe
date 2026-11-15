@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { VOLUNTEER_PATHS, shiftPath } from "@/lib/volunteer-paths";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
 import { reviewProject } from "@/server/modules/projects";
@@ -22,7 +23,8 @@ export async function reviewProjectAction(id: string, _prev: FormState, form: Fo
   }
   revalidatePath("/admin/projects");
   revalidatePath(`/dashboard/projects/${id}`);
-  revalidatePath("/projects");
-  revalidatePath(`/projects/${id}`);
+  revalidatePath(VOLUNTEER_PATHS.hub);
+  revalidatePath(VOLUNTEER_PATHS.shifts);
+  revalidatePath(shiftPath(id));
   return { ok: true, message: "Decision recorded." };
 }

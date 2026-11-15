@@ -132,7 +132,12 @@ export default async function ProjectEditorPage({
                 {l.state === "CONFIRMED" && !l.inArea && (
                   <p className="text-sm text-bad">This project is no longer inside the event&apos;s area, so it is not shown there.</p>
                 )}
-                {l.state === "DISMISSED" && !l.canRelink && <p className="text-sm text-muted">A county administrator removed this project from the event.</p>}
+                {l.state === "DISMISSED" && l.dismissedBy === "ADMIN" && !l.canRelink && (
+                  <p className="text-sm text-muted">A county administrator removed this project from the event.</p>
+                )}
+                {l.state === "DISMISSED" && l.dismissedBy === "ORG" && !l.canRelink && (
+                  <p className="text-sm text-muted">Removed by the organization{l.eventStatus === "CLOSED" ? "; the event is closed" : l.inArea ? "" : "; the project is no longer inside the event's area"}.</p>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {l.canUnlink && <ActionButton action={unlinkEventAction.bind(null, project.id, l.eventId)} label="Remove from this event" />}

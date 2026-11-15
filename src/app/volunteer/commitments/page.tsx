@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ActionButton } from "@/components/project-forms";
+import { VOLUNTEER_PATHS, shiftPath } from "@/lib/volunteer-paths";
 import { getDriver } from "@/server/db";
 import { getCommitmentByToken } from "@/server/modules/volunteers";
 import { cancelCommitmentAction, confirmCommitmentAction } from "./actions";
@@ -18,7 +19,7 @@ function NotValid() {
       <h1 className="text-2xl">This link is not valid</h1>
       <p className="mt-2 text-muted">
         It may have been mistyped or cut off. Use the link in your confirmation email, or find a shift on the{" "}
-        <Link className="underline" href="/projects">volunteer projects page</Link>.
+        <Link className="underline" href={VOLUNTEER_PATHS.shifts}>volunteer shifts page</Link>.
       </p>
     </div>
   );
@@ -50,7 +51,7 @@ export default async function CommitmentPage({ searchParams }: { searchParams: P
           <h2 id="withdrawn-h" className="text-lg font-semibold"><span aria-hidden="true">✕</span> This project has been withdrawn</h2>
           <p className="mt-1 text-sm">
             The organization cancelled this project or is not currently active, so please do not travel for it. You can step back
-            from this sign-up below, or look for other shifts on the <Link className="underline" href="/projects">projects page</Link>.
+            from this sign-up below, or look for other shifts on the <Link className="underline" href={VOLUNTEER_PATHS.shifts}>shifts page</Link>.
           </p>
           <div className="mt-3"><ActionButton action={cancelCommitmentAction.bind(null, token)} label="Cancel my sign-up" /></div>
         </section>
@@ -88,7 +89,7 @@ export default async function CommitmentPage({ searchParams }: { searchParams: P
       {status === "CANCELLED" && (
         <p role="status" className="mt-4 rounded-md bg-surface p-3 text-sm">
           This sign-up was cancelled or its 24-hour hold ended, so the spot was released.{" "}
-          <Link className="underline" href={`/projects/${project.id}`}>Sign up again on the project page</Link>.
+          <Link className="underline" href={shiftPath(project.id)}>Sign up again on the project page</Link>.
         </p>
       )}
       {status === "NO_SHOW" && <p role="status" className="mt-4 rounded-md bg-surface p-3 text-sm">This sign-up has been closed by the organization.</p>}
