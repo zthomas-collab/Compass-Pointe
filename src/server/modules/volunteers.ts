@@ -72,14 +72,6 @@ export async function signUpForNeed(driver: Driver, raw: unknown): Promise<{ com
       if (n.project_status !== "OPEN" || !n.org_ok) throw new AppError("VALIDATION", "This project is not open for sign-ups right now.");
       if (n.ends_at && new Date(n.ends_at).getTime() <= Date.now()) throw new AppError("VALIDATION", "This shift has already ended.");
 
-      const recent = await tx.query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM volunteer_commitments WHERE email = $1 AND created_at > now() - interval '24 hours'`,
-        [input.email],
-      );
-      if (recent[0].n >= DAILY_SIGNUP_LIMIT) {
-        throw new AppError("RATE_LIMITED", "You have already signed up for several shifts today. Please try again tomorrow.");
-      }
-
       // Free the slots of abandoned sign-ups before counting.
       const expired = await tx.query<{ id: string }>(
         `UPDATE volunteer_commitments SET status = 'CANCELLED', cancelled_at = now()
@@ -88,17 +80,31 @@ export async function signUpForNeed(driver: Driver, raw: unknown): Promise<{ com
       );
       for (const e of expired) await recordEvent(tx, e.id, "HOLD_EXPIRED", "PENDING_EMAIL", "CANCELLED", "SYSTEM");
 
-      const mine = await tx.query(
-        `SELECT 1 FROM volunteer_commitments WHERE need_id = $1 AND email = $2 AND status IN ('PENDING_EMAIL','CONFIRMED','ATTENDED')`,
-        [input.needId, input.email],
-      );
-      if (mine.length) throw new AppError("CONFLICT", "You already signed up for this shift. Check your email for your link.");
-
+      // Fullness is judged first and answered identically for everyone, so asking "is this address already signed up?"
+      // cannot be told apart from asking about any other address. (A person's own hold counts toward fullness.)
       const taken = await tx.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM volunteer_commitments WHERE need_id = $1 AND ${TAKEN_SQL}`,
         [input.needId],
       );
-      if (taken[0].n >= n.slots_needed) throw new AppError("CONFLICT", "This shift is full.");
+      if (taken[0].n >= n.slots_needed) throw new AppError("CONFLICT", "This shift is full right now. Spots open up when someone cancels.");
+
+      // The same address twice quietly resolves to the existing sign-up: no second row, no second email, same reply.
+      const mine = await tx.query<{ id: string }>(
+        `SELECT id FROM volunteer_commitments WHERE need_id = $1 AND email = $2 AND status IN ('PENDING_EMAIL','CONFIRMED','ATTENDED') LIMIT 1`,
+        [input.needId, input.email],
+      );
+      if (mine.length) return { commitmentId: mine[0].id };
+
+      // Cancelled and lapsed sign-ups do not count, so nobody can lock another person's address out for a day.
+      const recent = await tx.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM volunteer_commitments
+          WHERE email = $1 AND created_at > now() - interval '24 hours'
+            AND status <> 'CANCELLED' AND NOT (status = 'PENDING_EMAIL' AND hold_expires_at <= now())`,
+        [input.email],
+      );
+      if (recent[0].n >= DAILY_SIGNUP_LIMIT) {
+        throw new AppError("RATE_LIMITED", "Too many sign-ups from this address today. Please try again tomorrow.");
+      }
 
       const token = newToken();
       const rows = await tx.query<{ id: string }>(
@@ -132,7 +138,8 @@ export async function signUpForNeed(driver: Driver, raw: unknown): Promise<{ com
 export type CommitmentView = {
   id: string;
   status: CommitmentStatus;
-  volunteerName: string;
+  /** True when the organization cancelled the project or is no longer approved: the meeting details are withheld. */
+  withdrawn: boolean;
   holdExpiresAt: string | null;
   project: { id: string; title: string; orgName: string; countyName: string; state: string; zip: string };
   need: { id: string; title: string; startsAt: string | null; endsAt: string | null; skills: string | null };
@@ -143,7 +150,8 @@ export type CommitmentView = {
 };
 
 type DbCommitment = {
-  id: string; need_id: string; status: CommitmentStatus; volunteer_name: string; hold_expires_at: Date | null;
+  id: string; need_id: string; status: CommitmentStatus; hold_expires_at: Date | null;
+  project_status: string; org_ok: boolean;
   project_id: string; project_title: string; org_name: string; county_name: string; state: string; zip: string;
   need_title: string; starts_at: Date | null; ends_at: Date | null; skills: string | null;
   private_location_notes: string | null; instructions: string | null; hold_expired: boolean;
@@ -153,8 +161,9 @@ type DbCommitment = {
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{20,128}$/;
 
 const COMMITMENT_SELECT = `
-  SELECT c.id, c.need_id, c.status, c.volunteer_name, c.hold_expires_at,
+  SELECT c.id, c.need_id, c.status, c.hold_expires_at,
          (c.status = 'PENDING_EMAIL' AND c.hold_expires_at <= now()) AS hold_expired,
+         p.status AS project_status, (o.status = 'APPROVED' AND NOT o.publication_suspended) AS org_ok,
          p.id AS project_id, p.title AS project_title, o.display_name AS org_name, ct.name AS county_name, ct.state, p.zip,
          n.title AS need_title, n.starts_at, n.ends_at, n.skills, p.private_location_notes, n.instructions
     FROM volunteer_commitments c
@@ -162,6 +171,9 @@ const COMMITMENT_SELECT = `
     JOIN organizations o ON o.id = p.org_id JOIN counties ct ON ct.id = p.county_id`;
 
 const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
+
+/** The organization cancelled the project, or is no longer approved to publish: nobody should travel on this sign-up. */
+const isWithdrawn = (c: Pick<DbCommitment, "project_status" | "org_ok">) => c.project_status === "CANCELLED" || !c.org_ok;
 
 /**
  * Read-only: the page behind the emailed link. Never changes anything, so an email scanner that prefetches the link
@@ -175,9 +187,10 @@ export async function getCommitmentByToken(driver: Driver, token: string): Promi
     if (!rows.length) return null;
     const r = rows[0];
     const status: CommitmentStatus = r.hold_expired ? "CANCELLED" : r.status;
-    const reveal = status === "CONFIRMED" || status === "ATTENDED";
+    const withdrawn = isWithdrawn(r);
+    const reveal = (status === "CONFIRMED" || status === "ATTENDED") && !withdrawn;
     return {
-      id: r.id, status, volunteerName: r.volunteer_name, holdExpiresAt: status === "PENDING_EMAIL" ? iso(r.hold_expires_at) : null,
+      id: r.id, status, withdrawn, holdExpiresAt: status === "PENDING_EMAIL" ? iso(r.hold_expires_at) : null,
       project: { id: r.project_id, title: r.project_title, orgName: r.org_name, countyName: r.county_name, state: r.state, zip: r.zip },
       need: { id: r.need_id, title: r.need_title, startsAt: iso(r.starts_at), endsAt: iso(r.ends_at), skills: r.skills },
       privateLocationNotes: reveal ? r.private_location_notes : null,
@@ -196,6 +209,36 @@ async function lockByToken(tx: Tx, token: string): Promise<DbCommitment | null> 
   return rows[0] ?? null;
 }
 
+/**
+ * Tell volunteers that their plans are off. These messages carry no private link and no meeting details: only that the
+ * sign-up is cancelled and where to find other shifts. Queued in the caller's transaction, so they exist if and only if the
+ * cancellation does.
+ */
+async function enqueueNotice(tx: Tx, to: string, projectTitle: string, needTitle: string, what: "project" | "removed"): Promise<void> {
+  const body =
+    what === "project"
+      ? `The organization cancelled "${projectTitle}", so your volunteer sign-up for "${needTitle}" is cancelled too. Please do not travel for it.`
+      : `The organization removed your volunteer sign-up for "${needTitle}" on "${projectTitle}". If you think this is a mistake, please contact the organization.`;
+  await enqueueEmail(tx, {
+    kind: "VOLUNTEER_NOTICE",
+    to,
+    subject: `${brandName()}: your volunteer sign-up was cancelled`,
+    body: `${body}\n\nYou can find other shifts at ${appBaseUrl()}/projects`,
+  });
+}
+
+/** Email every volunteer who holds a slot (confirmed, or pending with an unexpired hold) that the project was cancelled. */
+export async function noticeProjectCancelled(tx: Tx, projectId: string): Promise<void> {
+  const rows = await tx.query<{ email: string; project_title: string; need_title: string }>(
+    `SELECT c.email, p.title AS project_title, n.title AS need_title
+       FROM volunteer_commitments c JOIN project_needs n ON n.id = c.need_id JOIN projects p ON p.id = n.project_id
+      WHERE p.id = $1 AND (c.status = 'CONFIRMED' OR (c.status = 'PENDING_EMAIL' AND c.hold_expires_at > now()))
+      ORDER BY c.created_at, c.id`,
+    [projectId],
+  );
+  for (const r of rows) await enqueueNotice(tx, r.email, r.project_title, r.need_title, "project");
+}
+
 const shiftEnded = (c: DbCommitment) => c.ends_at !== null && new Date(c.ends_at).getTime() <= Date.now();
 
 /** Volunteer: confirm a sign-up (an explicit action, never a page view). Idempotent once confirmed. */
@@ -212,6 +255,7 @@ export async function confirmCommitment(driver: Driver, token: string): Promise<
         await recordEvent(tx, c.id, "HOLD_EXPIRED", "PENDING_EMAIL", "CANCELLED", "SYSTEM");
         return "expired";
       }
+      if (isWithdrawn(c)) throw new AppError("VALIDATION", "This project is no longer taking volunteers.");
       if (shiftEnded(c)) throw new AppError("VALIDATION", "This shift has already ended.");
       await tx.query(`UPDATE volunteer_commitments SET status = 'CONFIRMED', confirmed_at = now() WHERE id = $1`, [c.id]);
       await recordEvent(tx, c.id, "CONFIRMED", "PENDING_EMAIL", "CONFIRMED", "VOLUNTEER");
@@ -315,6 +359,12 @@ export async function markAttendance(driver: Driver, userId: string, commitmentI
         if (c.status === "CANCELLED") return;
         if (c.status !== "PENDING_EMAIL" && c.status !== "CONFIRMED") throw new AppError("VALIDATION", "This sign-up can no longer be cancelled.");
         await tx.query(`UPDATE volunteer_commitments SET status = 'CANCELLED', cancelled_at = now() WHERE id = $1`, [id]);
+        const who = await tx.query<{ email: string; project_title: string; need_title: string }>(
+          `SELECT c.email, p.title AS project_title, n.title AS need_title
+             FROM volunteer_commitments c JOIN project_needs n ON n.id = c.need_id JOIN projects p ON p.id = n.project_id WHERE c.id = $1`,
+          [id],
+        );
+        await enqueueNotice(tx, who[0].email, who[0].project_title, who[0].need_title, "removed");
       } else {
         if (c.status !== "CONFIRMED") throw new AppError("VALIDATION", "Only a confirmed volunteer can be marked as attended or a no-show.");
         if (c.starts_at && new Date(c.starts_at).getTime() > Date.now()) throw new AppError("VALIDATION", "The shift has not started yet.");

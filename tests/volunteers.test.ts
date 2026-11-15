@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Driver, Tx } from "@/server/db";
+import { createDriver, type Driver, type Tx } from "@/server/db";
+import { migrate } from "@/server/db/migrate";
 import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
 import { addNeed, createProject, getPublicProject, removeNeed, reviewProject, searchProjects, setProjectStatus, submitProject, updateNeed } from "@/server/modules/projects";
@@ -130,19 +131,47 @@ describe("volunteer sign-up", () => {
     await expect(signup(needIds[0], { email: uniqueEmail(), consentShare: "on" })).resolves.toBeTruthy();
   });
 
-  it("stops one email taking two slots of a need, and applies a per-email daily limit", async () => {
+  it("stops one email taking two slots of a need, without telling the caller, and applies a per-email daily limit", async () => {
     const { needIds } = await makeProject("OPEN", [{}, {}, {}, {}, {}, {}], "Many needs project");
-    await signup(needIds[0], { email: "Dup@Example.test" });
-    await expect(signup(needIds[0], { email: "dup@example.test" })).rejects.toMatchObject({ code: "CONFLICT" });
-    for (const id of needIds.slice(0, 5)) {
-      if (id === needIds[0]) continue;
-      await signup(id, { email: "dup@example.test" });
-    }
+    const first = await signup(needIds[0], { email: "Dup@Example.test" });
+    // The same email again (different letter case) quietly resolves to the existing sign-up: no second row, no second email.
+    const again = await signup(needIds[0], { email: "dup@example.test" });
+    expect(again.commitmentId).toBe(first.commitmentId);
+    const rows = await sys((tx) => tx.query(`SELECT 1 FROM volunteer_commitments WHERE need_id = $1 AND email = 'dup@example.test'`, [needIds[0]]));
+    expect(rows).toHaveLength(1);
+    const mails = await sys((tx) => tx.query(`SELECT 1 FROM notification_jobs WHERE recipient_email = 'dup@example.test'`));
+    expect(mails).toHaveLength(1);
+    for (const id of needIds.slice(1, 5)) await signup(id, { email: "dup@example.test" });
     // 5 sign-ups so far for this email in the last 24 hours (needs 0-4); the 6th is refused.
     await expect(signup(needIds[5], { email: "dup@example.test" })).rejects.toMatchObject({ code: "RATE_LIMITED" });
   });
 
-  it("never overbooks under concurrent sign-ups", async () => {
+  it("does not reveal whether an email is already signed up for a shift", async () => {
+    const { needIds } = await makeProject("OPEN", [{ slots: 1 }], "No oracle project");
+    await signup(needIds[0], { email: "holder@example.test" });
+    // The shift is full. The holder asking again and a stranger asking must get the very same answer.
+    const asHolder = await signup(needIds[0], { email: "holder@example.test" }).catch((e: Error & { code?: string }) => e);
+    const asStranger = await signup(needIds[0], { email: "stranger@example.test" }).catch((e: Error & { code?: string }) => e);
+    expect(asHolder).toBeInstanceOf(Error);
+    expect(asStranger).toBeInstanceOf(Error);
+    expect((asHolder as { code?: string }).code).toBe((asStranger as { code?: string }).code);
+    expect((asHolder as Error).message).toBe((asStranger as Error).message);
+  });
+
+  it("does not count cancelled sign-ups against the daily limit", async () => {
+    const { needIds } = await makeProject("OPEN", [{}, {}, {}, {}, {}, {}], "Cancel frees the limit project");
+    const email = "canceller@example.test";
+    for (const id of needIds.slice(0, 5)) await signup(id, { email });
+    await expect(signup(needIds[5], { email })).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    // Someone else cannot lock this person out for a day: once they cancel one, they can sign up again.
+    const t = await sys((tx) => tx.query<{ body_text: string }>(`SELECT body_text FROM notification_jobs WHERE recipient_email = $1 ORDER BY created_at, id LIMIT 1`, [email]));
+    await cancelCommitment(db, /token=([A-Za-z0-9_-]+)/.exec(t[0].body_text)![1]);
+    await expect(signup(needIds[5], { email })).resolves.toBeTruthy();
+  });
+
+  it("never exceeds the slot count across many sign-ups fired at once", async () => {
+    // PGlite runs transactions one at a time, so this proves the capacity LOGIC, not the row lock: the lock is exercised
+    // by the real-Postgres test below (runs when DATABASE_URL points at a disposable PostGIS database).
     const { needIds } = await makeProject("OPEN", [{ slots: 3 }], "Concurrent project");
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => signup(needIds[0], { email: uniqueEmail() })));
     const ok = results.filter((r) => r.status === "fulfilled");
@@ -204,7 +233,10 @@ describe("token page, confirm and cancel", () => {
     const f = await fresh();
     for (let i = 0; i < 5; i++) {
       const v = (await getCommitmentByToken(db, f.token))!;
-      expect(v).toMatchObject({ status: "PENDING_EMAIL", privateLocationNotes: null, instructions: null, volunteerName: "Pat Volunteer" });
+      expect(v).toMatchObject({ status: "PENDING_EMAIL", privateLocationNotes: null, instructions: null, withdrawn: false });
+      // A link that reached the wrong inbox (a typo'd address) must not show the volunteer's name.
+      expect(v).not.toHaveProperty("volunteerName");
+      expect(JSON.stringify(v)).not.toContain("Pat Volunteer");
       expect(v.project.title).toContain("Token project");
       expect(v.holdExpiresAt).not.toBeNull();
     }
@@ -422,5 +454,148 @@ describe("spots left, roster and attendance", () => {
     await expect(updateNeed(db, admin, needIds[0], { ...same, startsAt: future(60), endsAt: future(64) })).resolves.toBeUndefined();
     await reopen();
     await expect(removeNeed(db, admin, needIds[0])).rejects.toMatchObject(guard);
+  });
+});
+
+describe("withdrawn projects and volunteer notices", () => {
+  const tokenFor = async (email: string) => {
+    const rows = await sys((tx) =>
+      tx.query<{ body_text: string }>(`SELECT body_text FROM notification_jobs WHERE recipient_email = $1 AND kind = 'VOLUNTEER_CONFIRM' ORDER BY created_at DESC, id DESC LIMIT 1`, [email]),
+    );
+    return /token=([A-Za-z0-9_-]+)/.exec(rows[0].body_text)![1];
+  };
+  const join = async (needId: string, confirm: boolean) => {
+    const email = uniqueEmail();
+    const { commitmentId } = await signup(needId, { email });
+    const token = await tokenFor(email);
+    if (confirm) await confirmCommitment(db, token);
+    return { email, token, commitmentId };
+  };
+  const notices = async (email: string) =>
+    sys((tx) => tx.query<{ subject: string; body_text: string }>(`SELECT subject, body_text FROM notification_jobs WHERE recipient_email = $1 AND kind = 'VOLUNTEER_NOTICE'`, [email]));
+
+  it("hides the meeting details and refuses confirmation once the organization cancels the project", async () => {
+    const { projectId, needIds } = await makeProject("OPEN", [{ slots: 5 }], "Cancelled with volunteers project");
+    const confirmed = await join(needIds[0], true);
+    const pending = await join(needIds[0], false);
+    expect((await getCommitmentByToken(db, confirmed.token))!).toMatchObject({ status: "CONFIRMED", withdrawn: false, privateLocationNotes: PRIVATE_NOTES });
+    await setProjectStatus(db, admin, projectId, "CANCELLED");
+    const view = (await getCommitmentByToken(db, confirmed.token))!;
+    expect(view).toMatchObject({ withdrawn: true, privateLocationNotes: null, instructions: null });
+    await expect(confirmCommitment(db, pending.token)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await getCommitmentByToken(db, pending.token))!.withdrawn).toBe(true);
+    // Volunteers can still step back from a cancelled project.
+    await expect(cancelCommitment(db, confirmed.token)).resolves.toBeUndefined();
+  });
+
+  it("treats a suspended organization the same way, and recovers when it is reinstated", async () => {
+    const { needIds } = await makeProject("OPEN", [{ slots: 5 }], "Suspended org project");
+    const confirmed = await join(needIds[0], true);
+    const pending = await join(needIds[0], false);
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = true WHERE id = $1`, [orgA]));
+    try {
+      expect((await getCommitmentByToken(db, confirmed.token))!).toMatchObject({ withdrawn: true, privateLocationNotes: null, instructions: null });
+      await expect(confirmCommitment(db, pending.token)).rejects.toMatchObject({ code: "VALIDATION" });
+    } finally {
+      await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = false WHERE id = $1`, [orgA]));
+    }
+    expect((await getCommitmentByToken(db, confirmed.token))!).toMatchObject({ withdrawn: false, privateLocationNotes: PRIVATE_NOTES });
+    await expect(confirmCommitment(db, pending.token)).resolves.toBeUndefined();
+  });
+
+  it("emails confirmed and pending volunteers when a project is cancelled, and nobody else", async () => {
+    const { projectId, needIds } = await makeProject("OPEN", [{ slots: 5 }], "Notice on cancel project");
+    const confirmed = await join(needIds[0], true);
+    const pending = await join(needIds[0], false);
+    const stepped = await join(needIds[0], true);
+    await cancelCommitment(db, stepped.token);
+    const expired = await join(needIds[0], false);
+    await sys((tx) => tx.query(`UPDATE volunteer_commitments SET hold_expires_at = now() - interval '1 minute' WHERE id = $1`, [expired.commitmentId]));
+    await setProjectStatus(db, admin, projectId, "CANCELLED");
+    for (const v of [confirmed, pending]) {
+      const n = await notices(v.email);
+      expect(n).toHaveLength(1);
+      expect(n[0].subject.toLowerCase()).toContain("cancel");
+      expect(n[0].body_text).toContain("Notice on cancel project");
+      expect(n[0].body_text).not.toContain("token=");
+      expect(n[0].body_text).not.toContain(PRIVATE_NOTES);
+    }
+    expect(await notices(stepped.email)).toHaveLength(0);
+    expect(await notices(expired.email)).toHaveLength(0);
+  });
+
+  it("does not email volunteers when a project is only paused or completed", async () => {
+    const { projectId, needIds } = await makeProject("OPEN", [{ slots: 5 }], "Pause sends no notice project");
+    const v = await join(needIds[0], true);
+    await setProjectStatus(db, admin, projectId, "PAUSED");
+    await setProjectStatus(db, admin, projectId, "OPEN");
+    await setProjectStatus(db, admin, projectId, "COMPLETED");
+    expect(await notices(v.email)).toHaveLength(0);
+  });
+
+  it("emails a volunteer whom the organization removes", async () => {
+    const { needIds } = await makeProject("OPEN", [{ slots: 5 }], "Removed volunteer project");
+    const v = await join(needIds[0], true);
+    await markAttendance(db, admin, v.commitmentId, "CANCELLED");
+    const n = await notices(v.email);
+    expect(n).toHaveLength(1);
+    expect(n[0].body_text).toContain("Removed volunteer project");
+    expect(n[0].body_text).not.toContain("token=");
+    // Marking someone attended or a no-show sends nothing.
+    const w = await join(needIds[0], true);
+    await sys((tx) => tx.query(`UPDATE project_needs SET starts_at = now() - interval '1 hour' WHERE id = $1`, [needIds[0]]));
+    await markAttendance(db, admin, w.commitmentId, "ATTENDED");
+    expect(await notices(w.email)).toHaveLength(0);
+  });
+});
+
+describe("database guards", () => {
+  it("requires a hold expiry on every pending sign-up", async () => {
+    const { needIds } = await makeProject("OPEN", [{}], "Hold expiry constraint project");
+    await expect(
+      sys((tx) =>
+        tx.query(
+          `INSERT INTO volunteer_commitments (need_id, volunteer_name, email, status, token_hash, hold_expires_at, consent_share)
+           VALUES ($1, 'No Hold', 'nohold@example.test', 'PENDING_EMAIL', repeat('a', 64), NULL, true)`,
+          [needIds[0]],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+});
+
+// Real-Postgres concurrency: PGlite (the default test database) serialises transactions, so only a real server can
+// prove that the row lock on the need keeps the last slots from being given out twice. Point DATABASE_URL at a
+// disposable PostGIS database (CI does) to run this; it is skipped otherwise.
+describe.skipIf(!process.env.DATABASE_URL)("sign-up capacity on real PostgreSQL", () => {
+  it("never overbooks when sign-ups truly race", async () => {
+    const pg = await createDriver({ databaseUrl: process.env.DATABASE_URL });
+    try {
+      await migrate(pg);
+      const saved = db;
+      db = pg;
+      try {
+        const rexec = await makeUser(pg, `race-exec-${Date.now()}@example.test`);
+        await grantRole(pg, rexec, "PLATFORM_ADMIN");
+        const radmin = await makeUser(pg, `race-admin-${Date.now()}@example.test`);
+        const county = await createCounty(pg, rexec, { name: `Race ${Date.now() % 100000}`, state: "NC" });
+        const org = await makeOrg(pg, { name: `Race Org ${Date.now()}`, members: [{ userId: radmin, role: "ORG_ADMIN" }] });
+        await runIn(pg, { kind: "system" }, (tx) => tx.query(`INSERT INTO organization_counties (org_id, county_id) VALUES ($1, $2)`, [org, county]));
+        const pid = await createProject(pg, radmin, org, {
+          title: "Race project", description: "A project used to race sign-ups for the last slots.",
+          countyId: county, zip: "28801", audience: "COMMUNITY",
+        });
+        const needId = await addNeed(pg, radmin, pid, { title: "Race crew", slotsNeeded: 3, startsAt: future(48), endsAt: future(52) });
+        await submitProject(pg, radmin, pid);
+        await reviewProject(pg, rexec, pid, { decision: "APPROVE", note: "Approved for the race" });
+        const results = await Promise.allSettled(Array.from({ length: 12 }, (_, i) => signup(needId, { email: `racer-${Date.now()}-${i}@example.test` })));
+        expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(3);
+        expect(await holding(needId)).toBe(3);
+      } finally {
+        db = saved;
+      }
+    } finally {
+      await pg.close();
+    }
   });
 });

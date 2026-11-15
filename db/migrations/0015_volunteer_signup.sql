@@ -21,7 +21,9 @@ CREATE TABLE volunteer_commitments (
   confirmed_at         timestamptz,
   cancelled_at         timestamptz,
   attendance_marked_by uuid REFERENCES users(id),
-  attendance_marked_at timestamptz
+  attendance_marked_at timestamptz,
+  -- A pending sign-up with no expiry would never count toward capacity yet could still be confirmed.
+  CHECK (status <> 'PENDING_EMAIL' OR hold_expires_at IS NOT NULL)
 );
 -- One active sign-up per email per need. (Expired pending holds are cancelled by the service before a re-sign-up.)
 CREATE UNIQUE INDEX volunteer_commitments_active_uq ON volunteer_commitments (need_id, email)

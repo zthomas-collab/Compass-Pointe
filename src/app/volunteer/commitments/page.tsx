@@ -43,10 +43,20 @@ export default async function CommitmentPage({ searchParams }: { searchParams: P
         <p className="mt-1">Role: <strong>{need.title}</strong></p>
         {shift && <p className="text-sm text-muted">{shift}</p>}
         {need.skills && <p className="text-sm text-muted">Skills or what to bring: {need.skills}</p>}
-        <p className="mt-2 text-sm">Signed up as {view.volunteerName}</p>
       </div>
 
-      {status === "PENDING_EMAIL" && (
+      {view.withdrawn && (status === "PENDING_EMAIL" || status === "CONFIRMED") && (
+        <section role="alert" className="mt-4 rounded-md bg-bad-bg p-4 text-bad" aria-labelledby="withdrawn-h">
+          <h2 id="withdrawn-h" className="text-lg font-semibold"><span aria-hidden="true">✕</span> This project has been withdrawn</h2>
+          <p className="mt-1 text-sm">
+            The organization cancelled this project or is not currently active, so please do not travel for it. You can step back
+            from this sign-up below, or look for other shifts on the <Link className="underline" href="/projects">projects page</Link>.
+          </p>
+          <div className="mt-3"><ActionButton action={cancelCommitmentAction.bind(null, token)} label="Cancel my sign-up" /></div>
+        </section>
+      )}
+
+      {!view.withdrawn && status === "PENDING_EMAIL" && (
         <section className="card mt-4 p-4" aria-labelledby="pending-h">
           <h2 id="pending-h" className="text-lg font-semibold">Confirm your spot</h2>
           <p className="mt-1 text-sm text-muted">
@@ -59,7 +69,7 @@ export default async function CommitmentPage({ searchParams }: { searchParams: P
         </section>
       )}
 
-      {(status === "CONFIRMED" || status === "ATTENDED") && (
+      {!view.withdrawn && (status === "CONFIRMED" || status === "ATTENDED") && (
         <section className="card mt-4 p-4" aria-labelledby="confirmed-h">
           <h2 id="confirmed-h" className="text-lg font-semibold">
             <span aria-hidden="true">✓</span> {status === "ATTENDED" ? "Thank you for helping" : "You are confirmed"}

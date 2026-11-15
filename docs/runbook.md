@@ -55,5 +55,8 @@ Managed PITR with ≥ 14-day retention plus a daily logical dump to a separate a
 ## Volunteer data (personal data) — **needs a policy before launch**
 Volunteer sign-ups store a name, email, phone and a hashed private-link token in `volunteer_commitments`, visible only to the owning organization's editors, the project's county administrators and executives. There is **no retention or anonymization job yet**: decide how long to keep sign-ups after a project ends (and how a volunteer can ask for erasure) and add the job before public launch. Confirmation emails carry the private link; the notification worker redacts the stored body after sending (kind `VOLUNTEER_CONFIRM`). Never log or audit a volunteer's name, email, phone or token.
 
+## Volunteer sign-up abuse (open risk)
+Sign-up needs no account and holds a slot for 24 hours before the email is verified, so a determined person can hoard slots with made-up addresses. The only guards today are the in-memory per-address rate limit (6 per 15 minutes, keyed on the first `X-Forwarded-For` hop, one shared bucket if no header is set) and a hidden trap field. Before public launch: put a shared limiter (Redis or the edge/WAF) in front of `signUpAction`, make sure the proxy overwrites rather than appends `X-Forwarded-For`, and consider a bot challenge, a shorter hold, or a cap on unconfirmed holds per shift. The per-address limit is 5 active sign-ups per 24 hours and does not count cancelled or lapsed ones.
+
 ## Known production blockers
 Managed auth + MFA (M1) · licensed tiles (M2) · email provider + worker (M4) · shared rate limiter · nonce-based CSP · tests on real PostGIS · load tests over HTTP · legal copy (M8). See `docs/01-assumptions-risks.md`.

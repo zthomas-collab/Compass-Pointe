@@ -7,7 +7,7 @@ import { canManageCounty, loadAccess } from "./access";
 import { DEFAULT_RADIUS_MILES, RADIUS_OPTIONS_MILES, membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
-import { TAKEN_SQL } from "./volunteers";
+import { TAKEN_SQL, noticeProjectCancelled } from "./volunteers";
 
 export type NeedRow = {
   id: string;
@@ -450,6 +450,8 @@ export async function setProjectStatus(driver: Driver, userId: string, id: strin
         throw new AppError("VALIDATION", `A project cannot move from ${p.status} to ${target}.`);
       }
       await tx.query(`UPDATE projects SET status = $2 WHERE id = $1`, [projectId, target]);
+      // People who were counting on this project are told it is off (pausing or completing does not cancel anyone).
+      if (target === "CANCELLED") await noticeProjectCancelled(tx, projectId);
       await writeAudit(tx, {
         actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_STATUS_CHANGED", subjectType: "project", subjectId: projectId,
         details: { from: p.status, to: target },
