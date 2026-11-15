@@ -62,8 +62,8 @@ export const eventSchema = z.object({
 });
 export type EventInput = z.infer<typeof eventSchema>;
 
-function resolveSlug(input: EventInput): string {
-  const slug = input.slug ?? slugify(input.name);
+function resolveSlug(input: EventInput, fallback?: string): string {
+  const slug = input.slug ?? fallback ?? slugify(input.name);
   const fail = (msg: string) => new AppError("VALIDATION", "Please correct the highlighted fields.", { slug: [msg] });
   if (!slug) throw fail("Add a slug: the name has no letters or digits to build one from");
   if (slug.length < 3 || slug.length > 80 || !SLUG.test(slug)) throw fail("Use 3-80 lowercase letters, digits and hyphens");
@@ -151,6 +151,78 @@ export async function getEventAdmin(driver: Driver, actorId: string, id: string)
       await assertExecutive(tx, actorId);
       const rows = await tx.query<DbEvent>(`${ADMIN_EVENT_SELECT} WHERE e.id = $1`, [eventId]);
       return rows[0] ? toEventRow(rows[0]) : null;
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+/** Lifecycle: a closed event is an archive and never reopens. */
+export const ALLOWED_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
+  DRAFT: ["ACTIVE"],
+  ACTIVE: ["RECOVERY", "CLOSED"],
+  RECOVERY: ["ACTIVE", "CLOSED"],
+  CLOSED: [],
+};
+
+type Locked = { id: string; slug: string; status: EventStatus };
+
+async function lockEvent(tx: Tx, id: string): Promise<Locked> {
+  const rows = await tx.query<Locked>(`SELECT id, slug, status FROM events WHERE id = $1 FOR UPDATE`, [id]);
+  if (!rows.length) throw new AppError("NOT_FOUND", "Event not found.");
+  return rows[0];
+}
+
+/** Executive: edit an event and replace its counties and ZIPs. The slug is fixed once the event leaves DRAFT. */
+export async function updateEvent(driver: Driver, actorId: string, id: string, raw: unknown): Promise<void> {
+  const eventId = parseOrThrow(z.string().uuid(), id);
+  const input = parseOrThrow(eventSchema, raw);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      await assertExecutive(tx, actorId);
+      const current = await lockEvent(tx, eventId);
+      const slug = resolveSlug(input, current.slug);
+      if (slug !== current.slug && current.status !== "DRAFT") {
+        throw new AppError("VALIDATION", "Please correct the highlighted fields.", { slug: ["The slug cannot change after an event is activated"] });
+      }
+      await assertKnownZips(tx, input.zips);
+      await tx.query(
+        `UPDATE events SET name = $2, slug = $3, hazard_type = $4, summary = $5, starts_on = $6::date WHERE id = $1`,
+        [eventId, input.name, slug, input.hazardType, input.summary ?? null, input.startsOn],
+      );
+      await tx.query(`DELETE FROM event_counties WHERE event_id = $1`, [eventId]);
+      await tx.query(`DELETE FROM event_zips WHERE event_id = $1`, [eventId]);
+      for (const countyId of input.countyIds) {
+        await tx.query(`INSERT INTO event_counties (event_id, county_id) VALUES ($1, $2)`, [eventId, countyId]);
+      }
+      for (const zip of input.zips) await tx.query(`INSERT INTO event_zips (event_id, zip) VALUES ($1, $2)`, [eventId, zip]);
+      await writeAudit(tx, { actorUserId: actorId, action: "EVENT_UPDATED", subjectType: "event", subjectId: eventId, details: { slug } });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+/** Executive: move an event along its lifecycle. Closing stamps closed_on. */
+export async function setEventStatus(driver: Driver, actorId: string, id: string, to: EventStatus): Promise<void> {
+  const eventId = parseOrThrow(z.string().uuid(), id);
+  const target = parseOrThrow(z.enum(["DRAFT", "ACTIVE", "RECOVERY", "CLOSED"]), to);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      await assertExecutive(tx, actorId);
+      const current = await lockEvent(tx, eventId);
+      if (!ALLOWED_TRANSITIONS[current.status].includes(target)) {
+        throw new AppError("VALIDATION", `An event cannot move from ${current.status} to ${target}.`);
+      }
+      // greatest(): an event that has not started yet can still be closed without breaking closed_on >= starts_on.
+      await tx.query(
+        `UPDATE events SET status = $2, closed_on = CASE WHEN $2 = 'CLOSED' THEN greatest(current_date, starts_on) END WHERE id = $1`,
+        [eventId, target],
+      );
+      await writeAudit(tx, {
+        actorUserId: actorId, action: "EVENT_STATUS_CHANGED", subjectType: "event", subjectId: eventId,
+        details: { from: current.status, to: target },
+      });
     });
   } catch (err) {
     throw fromDbError(err);

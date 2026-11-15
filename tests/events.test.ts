@@ -3,7 +3,7 @@ import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { AppError } from "@/server/errors";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
-import { createEvent, getEventAdmin, listEventsAdmin, slugify } from "@/server/modules/events";
+import { createEvent, getEventAdmin, listEventsAdmin, setEventStatus, slugify, updateEvent } from "@/server/modules/events";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeUser } from "./helpers/fixtures";
 
@@ -81,5 +81,59 @@ describe("event creation", () => {
     await expect(runIn(db, { kind: "anon" }, (tx) => tx.query(`SELECT * FROM events`))).rejects.toMatchObject({ code: "42501" });
     const rows = await runIn(db, { kind: "anon" }, (tx) => tx.query(`SELECT * FROM public_events WHERE id = $1`, [id]));
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("event status and edits", () => {
+  const today = () => new Date().toISOString().slice(0, 10);
+
+  it("walks DRAFT to ACTIVE to RECOVERY to CLOSED and audits each step", async () => {
+    const id = await createEvent(db, exec, base({ name: "Walk Through Event" }));
+    for (const to of ["ACTIVE", "RECOVERY", "CLOSED"] as const) await setEventStatus(db, exec, id, to);
+    expect((await getEventAdmin(db, exec, id))!.status).toBe("CLOSED");
+    const audit = await sys((tx) =>
+      tx.query<{ details: { from: string; to: string } }>(
+        `SELECT details FROM audit_logs WHERE action = 'EVENT_STATUS_CHANGED' AND subject_id = $1 ORDER BY occurred_at, id`, [id]),
+    );
+    expect(audit.map((a) => `${a.details.from}>${a.details.to}`).sort()).toEqual(["ACTIVE>RECOVERY", "DRAFT>ACTIVE", "RECOVERY>CLOSED"]);
+  });
+
+  it("sets closed_on exactly when closing and never reopens", async () => {
+    const id = await createEvent(db, exec, base({ name: "Close And Stay Closed" }));
+    await setEventStatus(db, exec, id, "ACTIVE");
+    expect((await getEventAdmin(db, exec, id))!.closedOn).toBeNull();
+    await setEventStatus(db, exec, id, "CLOSED");
+    expect((await getEventAdmin(db, exec, id))!.closedOn).toBe(today());
+    await expect(setEventStatus(db, exec, id, "ACTIVE")).rejects.toMatchObject({ code: "VALIDATION" });
+    const ev = (await getEventAdmin(db, exec, id))!;
+    expect(ev.status).toBe("CLOSED");
+    expect(ev.closedOn).toBe(today());
+  });
+
+  it("rejects illegal jumps", async () => {
+    const id = await createEvent(db, exec, base({ name: "Illegal Jumps Event" }));
+    await expect(setEventStatus(db, exec, id, "CLOSED")).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(setEventStatus(db, exec, id, "RECOVERY")).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await getEventAdmin(db, exec, id))!.status).toBe("DRAFT");
+  });
+
+  it("updates fields and areas, audits, and locks the slug after activation", async () => {
+    const id = await createEvent(db, exec, base({ name: "Editable Event" }));
+    await updateEvent(db, exec, id, base({ name: "Editable Event Renamed", slug: "editable-renamed", countyIds: [henderson], zips: ["28801"] }));
+    let ev = (await getEventAdmin(db, exec, id))!;
+    expect(ev).toMatchObject({ name: "Editable Event Renamed", slug: "editable-renamed", zips: ["28801"] });
+    expect(ev.counties.map((c) => c.name)).toEqual(["Henderson"]);
+    await setEventStatus(db, exec, id, "ACTIVE");
+    await expect(updateEvent(db, exec, id, base({ name: "Editable Event Renamed", slug: "other-slug" }))).rejects.toMatchObject({ code: "VALIDATION" });
+    await updateEvent(db, exec, id, base({ name: "Editable Event Renamed", slug: "editable-renamed", summary: "Updated summary" }));
+    ev = (await getEventAdmin(db, exec, id))!;
+    expect(ev.summary).toBe("Updated summary");
+    expect(ev.slug).toBe("editable-renamed");
+    const audit = await sys((tx) => tx.query(`SELECT 1 FROM audit_logs WHERE action = 'EVENT_UPDATED' AND subject_id = $1`, [id]));
+    expect(audit.length).toBeGreaterThanOrEqual(2);
+    for (const who of [plain, countyAdmin]) {
+      await expect(updateEvent(db, who, id, base())).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(setEventStatus(db, who, id, "RECOVERY")).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
   });
 });
