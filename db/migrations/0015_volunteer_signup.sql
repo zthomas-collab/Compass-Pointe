@@ -44,3 +44,14 @@ CREATE TRIGGER volunteer_commitment_events_append_only BEFORE UPDATE OR DELETE O
 
 ALTER TABLE volunteer_commitments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE volunteer_commitment_events ENABLE ROW LEVEL SECURITY;
+
+-- ---------------------------------------------------------------------------
+-- Public spots-left: the view gains a count of taken slots, computed from real sign-ups only
+-- (confirmed, attended, or pending with an unexpired hold). It still exposes no volunteer field.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW public_project_needs AS
+SELECT n.id, n.project_id, n.title, n.details, n.urgency, n.slots_needed, n.starts_at, n.ends_at, n.skills,
+       (SELECT count(*)::int FROM volunteer_commitments c
+         WHERE c.need_id = n.id
+           AND (c.status IN ('CONFIRMED','ATTENDED') OR (c.status = 'PENDING_EMAIL' AND c.hold_expires_at > now()))) AS slots_taken
+  FROM project_needs n JOIN public_projects p ON p.id = n.project_id;

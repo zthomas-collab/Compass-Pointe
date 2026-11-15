@@ -3,6 +3,8 @@ import { DAILY_SIGNUP_LIMIT, HOLD_HOURS, type CommitmentStatus } from "@/lib/vol
 import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
+import { canManageCounty, loadAccess } from "./access";
+import { membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
 import { appBaseUrl, brandName, enqueueEmail, hashToken, newToken, writeAudit } from "./shared";
 
@@ -234,6 +236,98 @@ export async function cancelCommitment(driver: Driver, token: string): Promise<v
       await tx.query(`UPDATE volunteer_commitments SET status = 'CANCELLED', cancelled_at = now() WHERE id = $1`, [c.id]);
       await recordEvent(tx, c.id, "CANCELLED", c.status, "CANCELLED", "VOLUNTEER");
       await writeAudit(tx, { actorUserId: null, action: "VOLUNTEER_CANCELLED", subjectType: "volunteer_commitment", subjectId: c.id, details: { needId: c.need_id } });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+export type RosterRow = {
+  id: string;
+  needId: string;
+  needTitle: string;
+  volunteerName: string;
+  email: string;
+  phone: string | null;
+  status: CommitmentStatus;
+  createdAt: string;
+  confirmedAt: string | null;
+};
+
+/** Org admins and editors of the owning org may run the roster. */
+async function isOrgEditor(tx: Tx, orgId: string, userId: string): Promise<boolean> {
+  const role = await membershipRole(tx, orgId, userId);
+  return role === "ORG_ADMIN" || role === "EDITOR";
+}
+
+/**
+ * The people signed up for a project's shifts. Org admins and editors of the owning org, administrators of the project's
+ * county, and executives may read it; everyone else (including org viewers) is refused. Expired holds are not people.
+ */
+export async function listRoster(driver: Driver, userId: string, projectId: string): Promise<RosterRow[]> {
+  const id = parseOrThrow(z.string().uuid(), projectId);
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    const p = await tx.query<{ org_id: string; county_id: string }>(`SELECT org_id, county_id FROM projects WHERE id = $1`, [id]);
+    if (!p.length) throw new AppError("NOT_FOUND", "Project not found.");
+    const access = await loadAccess(tx, userId);
+    if (!(await isOrgEditor(tx, p[0].org_id, userId)) && !canManageCounty(access, p[0].county_id)) {
+      throw new AppError("FORBIDDEN", "You cannot see this project's volunteers.");
+    }
+    const rows = await tx.query<{
+      id: string; need_id: string; need_title: string; volunteer_name: string; email: string; phone: string | null;
+      status: CommitmentStatus; created_at: Date; confirmed_at: Date | null;
+    }>(
+      `SELECT c.id, c.need_id, n.title AS need_title, c.volunteer_name, c.email, c.phone, c.status, c.created_at, c.confirmed_at
+         FROM volunteer_commitments c JOIN project_needs n ON n.id = c.need_id
+        WHERE n.project_id = $1 AND NOT (c.status = 'PENDING_EMAIL' AND c.hold_expires_at <= now())
+        ORDER BY n.starts_at NULLS LAST, n.created_at, n.id, c.created_at, c.id`,
+      [id],
+    );
+    return rows.map((r) => ({
+      id: r.id, needId: r.need_id, needTitle: r.need_title, volunteerName: r.volunteer_name, email: r.email, phone: r.phone,
+      status: r.status, createdAt: new Date(r.created_at).toISOString(), confirmedAt: iso(r.confirmed_at),
+    }));
+  });
+}
+
+/**
+ * Org admin or editor: record attendance (once the shift has started), or cancel a sign-up to free its slot.
+ * Lock order matches sign-up: the need, then the commitment.
+ */
+export async function markAttendance(driver: Driver, userId: string, commitmentId: string, to: "ATTENDED" | "NO_SHOW" | "CANCELLED"): Promise<void> {
+  const id = parseOrThrow(z.string().uuid(), commitmentId);
+  const target = parseOrThrow(z.enum(["ATTENDED", "NO_SHOW", "CANCELLED"]), to);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const found = await tx.query<{ need_id: string; org_id: string }>(
+        `SELECT c.need_id, p.org_id FROM volunteer_commitments c JOIN project_needs n ON n.id = c.need_id JOIN projects p ON p.id = n.project_id WHERE c.id = $1`,
+        [id],
+      );
+      if (!found.length) throw new AppError("NOT_FOUND", "Sign-up not found.");
+      if (!(await isOrgEditor(tx, found[0].org_id, userId))) throw new AppError("FORBIDDEN", "Only editors of the organization can change sign-ups.");
+      await tx.query(`SELECT 1 FROM project_needs WHERE id = $1 FOR UPDATE`, [found[0].need_id]);
+      const rows = await tx.query<{ status: CommitmentStatus; starts_at: Date | null }>(
+        `SELECT c.status, n.starts_at FROM volunteer_commitments c JOIN project_needs n ON n.id = c.need_id WHERE c.id = $1 FOR UPDATE OF c`,
+        [id],
+      );
+      const c = rows[0];
+      if (target === "CANCELLED") {
+        if (c.status === "CANCELLED") return;
+        if (c.status !== "PENDING_EMAIL" && c.status !== "CONFIRMED") throw new AppError("VALIDATION", "This sign-up can no longer be cancelled.");
+        await tx.query(`UPDATE volunteer_commitments SET status = 'CANCELLED', cancelled_at = now() WHERE id = $1`, [id]);
+      } else {
+        if (c.status !== "CONFIRMED") throw new AppError("VALIDATION", "Only a confirmed volunteer can be marked as attended or a no-show.");
+        if (c.starts_at && new Date(c.starts_at).getTime() > Date.now()) throw new AppError("VALIDATION", "The shift has not started yet.");
+        await tx.query(
+          `UPDATE volunteer_commitments SET status = $2, attendance_marked_by = $3, attendance_marked_at = now() WHERE id = $1`,
+          [id, target, userId],
+        );
+      }
+      await recordEvent(tx, id, target, c.status, target, "ORG");
+      await writeAudit(tx, {
+        actorUserId: userId, actorOrgId: found[0].org_id, action: "VOLUNTEER_STATUS_BY_ORG", subjectType: "volunteer_commitment", subjectId: id,
+        details: { needId: found[0].need_id, from: c.status, to: target },
+      });
     });
   } catch (err) {
     throw fromDbError(err);
