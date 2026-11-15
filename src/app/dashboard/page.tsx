@@ -64,7 +64,10 @@ export default async function DashboardPage() {
               <>
                 <div className="mt-4 flex items-center justify-between gap-2">
                   <h3 className="font-semibold">Staging sites ({sites.length})</h3>
-                  {canEdit && <Link className="btn btn-primary" href={`/dashboard/orgs/${o.id}/sites/new`}>New site</Link>}
+                  <span className="flex flex-wrap gap-2">
+                    <Link className="btn btn-secondary" href={`/dashboard/orgs/${o.id}/projects`}>Projects</Link>
+                    {canEdit && <Link className="btn btn-primary" href={`/dashboard/orgs/${o.id}/sites/new`}>New site</Link>}
+                  </span>
                 </div>
                 <ul className="mt-2 divide-y divide-line">
                   {sites.map((s) => (
