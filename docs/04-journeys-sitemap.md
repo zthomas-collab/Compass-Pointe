@@ -58,8 +58,12 @@ Public
 ├── /contacts                 ✅ Contacts (the spec's public Black Book) — name/description/type/ZIP + radius search
 ├── /events                   ✅ Events: open disaster areas, closed archive
 ├── /events/:slug             ✅ Event: area, help available there, and the volunteer Needs of projects attached to it
-├── /projects                 ✅ Volunteer projects: search by text, ZIP + radius, county
-├── /projects/:id             ✅ Project: volunteer roles, shifts, real spots left, and sign-up (no account)
+├── /volunteer                ✅ Volunteer & donate hub: "How do you want to help?", ZIP search, shifts needed now, quick gifts, how it works
+├── /volunteer/projects       ✅ Find a shift: search by text, ZIP + radius, county (moved from /projects)
+├── /volunteer/projects/:id   ✅ Project: volunteer roles, shifts, real spots left, and sign-up (no account)
+├── /volunteer/donate         ✅ Donate: choose what you are giving, then a short form with it preselected (?type=FOOD …)
+├── /volunteer/thanks         ✅ Thank-you after an offer: what happens next, next steps
+├── /projects, /projects/:id  ↪ permanent redirects to /volunteer/projects (query string kept); no longer in the main navigation
 ├── /volunteer/commitments    ✅ Private emailed link: confirm or cancel a sign-up; confirmed volunteers see where to go
 └── /black-book               ↪ redirects to /contacts
 
