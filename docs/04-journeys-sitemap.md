@@ -57,7 +57,7 @@ Public
 ├── /directory                ⏳ Nonprofit Directory (merged into Contacts for now)
 ├── /contacts                 ✅ Contacts (the spec's public Black Book) — name/description/type/ZIP + radius search
 ├── /events                   ✅ Events: open disaster areas, closed archive
-├── /events/:slug             ✅ Event: area, help available there (Needs: placeholder until projects exist)
+├── /events/:slug             ✅ Event: area, help available there, and the volunteer Needs of projects attached to it
 ├── /projects                 ✅ Volunteer projects: search by text, ZIP + radius, county
 ├── /projects/:id             ✅ Project: volunteer roles, shifts, real spots left, and sign-up (no account)
 ├── /volunteer/commitments    ✅ Private emailed link: confirm or cancel a sign-up; confirmed volunteers see where to go
@@ -67,7 +67,7 @@ Authenticated
 ├── /dashboard                ✅ Organization Dashboard + My Staging Locations
 ├── /dashboard/orgs/:id/sites/new  ✅ New staging site
 ├── /dashboard/orgs/:id/projects   ✅ My organization's projects
-├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete; volunteer roster and attendance
+├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete; volunteer roster and attendance; attach it to disaster events
 ├── /dashboard/sites/:id      ✅ Site detail: inventory, Update Availability, history
 ├── /dashboard/roads/new      ⏳ Submit Road Report
 ├── /dashboard/orgs/:id/profile ✅ My Organization Profile (public contacts, office ZIP, services, Contacts consent)
