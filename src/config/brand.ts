@@ -4,7 +4,7 @@
  * Everything that varies with branding lives here and is overridable with environment variables, so
  * official names, colors and logos can be dropped in without touching components:
  *
- *   BRAND_NAME, BRAND_TAGLINE, BRAND_OPERATOR, BRAND_LOGO_PATH (a file under /public, e.g. /brand/logo.svg)
+ *   BRAND_NAME, BRAND_TAGLINE, BRAND_LOGO_PATH (a file under /public, e.g. /brand/logo.svg)
  *   BRAND_COLOR_PRIMARY, BRAND_COLOR_INTERACTIVE, BRAND_COLOR_LINK, BRAND_COLOR_SOFT,
  *   BRAND_COLOR_ACCENT, BRAND_COLOR_BACKGROUND, BRAND_COLOR_TEXT   (each `#rrggbb`)
  *
@@ -34,7 +34,6 @@ export type BrandColors = {
 export type BrandConfig = {
   name: string;
   tagline: string;
-  operator: string;
   /** Path under /public (served same-origin, so it satisfies the CSP), or null to use the built-in mark. */
   logoPath: string | null;
   /** Intrinsic size of the logo file, to reserve layout space. Only known for the built-in official logo. */
@@ -134,7 +133,6 @@ export function loadBrand(env: Record<string, string | undefined> = process.env)
   return {
     name: text("BRAND_NAME", "Crisis Compass Carolinas"),
     tagline: text("BRAND_TAGLINE", "Direction When It Matters Most"),
-    operator: text("BRAND_OPERATOR", "Hiraeth Ventures"),
     logoPath,
     logoSize,
     colors,
