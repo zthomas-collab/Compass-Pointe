@@ -6,6 +6,7 @@ import { PROJECT_AUDIENCE_LABELS } from "@/lib/projects";
 import { signUpAction } from "../signup-actions";
 import { getDriver } from "@/server/db";
 import { getPublicOrganization } from "@/server/modules/directory";
+import { listPublicProjectEvents } from "@/server/modules/eventlinks";
 import { getPublicProject } from "@/server/modules/projects";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,7 @@ export default async function ProjectPage({ params }: Params) {
   if (!project) notFound();
   // Link to the organization only when its public profile is live.
   const orgProfile = await getPublicOrganization(db, project.orgId);
+  const events = await listPublicProjectEvents(db, project.id);
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <Link href="/projects" className="text-sm text-brand underline">← All projects</Link>
@@ -41,6 +43,17 @@ export default async function ProjectPage({ params }: Params) {
         {" · "}{project.countyName}, {project.state} {project.zip}
         {" · "}{PROJECT_AUDIENCE_LABELS[project.audience as keyof typeof PROJECT_AUDIENCE_LABELS] ?? project.audience}
       </p>
+      {events.length > 0 && (
+        <p className="mt-2 text-sm">
+          Part of:{" "}
+          {events.map((e, i) => (
+            <span key={e.id}>
+              {i > 0 && ", "}
+              <Link className="underline" href={`/events/${e.slug}`}>{e.name}</Link>{e.status === "CLOSED" ? " (closed)" : ""}
+            </span>
+          ))}
+        </p>
+      )}
       <p className="mt-4 whitespace-pre-line">{project.description}</p>
 
       <section className="mt-8" aria-labelledby="needs-h">

@@ -4,9 +4,13 @@ import { notFound } from "next/navigation";
 import { EventStatusBadge, HAZARD_LABELS } from "@/components/event-status";
 import { AvailabilityBadge } from "@/components/status";
 import { getDriver } from "@/server/db";
+import { listEventProjects } from "@/server/modules/eventlinks";
 import { getEventHelp, getPublicEvent } from "@/server/modules/events";
 
 export const dynamic = "force-dynamic";
+
+const fmtShift = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "medium", timeStyle: "short" }) : null;
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -22,7 +26,8 @@ export default async function EventPage({ params }: Params) {
   const db = await getDriver();
   const event = await getPublicEvent(db, slug);
   if (!event) notFound();
-  const help = await getEventHelp(db, event.id);
+  const [help, projects] = await Promise.all([getEventHelp(db, event.id), listEventProjects(db, event.id)]);
+  const spotsLeft = projects.reduce((sum, p) => sum + p.spotsLeft, 0);
   const area = event.zips.length
     ? `ZIP codes ${event.zips.join(", ")}`
     : event.counties.map((c) => `${c.name}, ${c.state}`).join("; ");
@@ -71,9 +76,43 @@ export default async function EventPage({ params }: Params) {
 
       <section className="mt-8" aria-labelledby="needs-h">
         <h2 id="needs-h" className="text-xl">Needs</h2>
-        <p className="mt-2 text-sm text-muted">
-          Volunteer and supply needs for this event will appear here once nonprofits post projects for it.
-        </p>
+        {event.status === "CLOSED" ? (
+          <p className="mt-2 text-sm text-muted">This event is closed. Its volunteer projects are no longer listed.</p>
+        ) : projects.length === 0 ? (
+          <p className="mt-2 text-sm text-muted">No volunteer projects are linked to this event yet.</p>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-muted">
+              {projects.length} volunteer project{projects.length === 1 ? "" : "s"} · {spotsLeft} spot{spotsLeft === 1 ? "" : "s"} left
+            </p>
+            <ul className="mt-3 grid gap-3">
+              {projects.map((p) => (
+                <li key={p.id} className="card p-4">
+                  <Link className="text-lg font-semibold text-brand underline" href={`/projects/${p.id}`}>{p.title}</Link>
+                  <p className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+                    {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent need</span>}
+                    <span className={`badge ${p.spotsLeft > 0 ? "tone-brand" : "tone-muted"}`}>
+                      {p.spotsLeft > 0 ? `${p.spotsLeft} of ${p.totalSlots} spots left` : `Full (${p.totalSlots} of ${p.totalSlots})`}
+                    </span>
+                    <span className="text-muted">{p.orgName} · {p.countyName}, {p.state} {p.zip}</span>
+                  </p>
+                  <ul className="mt-2 divide-y divide-line text-sm">
+                    {p.needs.map((n) => (
+                      <li key={n.id} className="py-1.5">
+                        <span className="font-medium">{n.title}</span>
+                        {n.urgency === "URGENT" && <span className="text-bad"> · urgent</span>}
+                        <span className="text-muted">
+                          {" · "}{n.spotsLeft > 0 ? `${n.spotsLeft} of ${n.slotsNeeded} spots left` : "Full"}
+                          {(n.startsAt || n.endsAt) && <> · {fmtShift(n.startsAt)} to {fmtShift(n.endsAt)} (Eastern Time)</>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </section>
     </div>
   );

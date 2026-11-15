@@ -6,6 +6,7 @@ import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
 import { easternLocalToIso, type ProjectStatus } from "@/lib/projects";
 import { addNeed, createProject, removeNeed, setProjectStatus, submitProject, updateNeed, updateProject } from "@/server/modules/projects";
+import { linkProjectToEvent, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
 import { markAttendance } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
@@ -98,6 +99,43 @@ export async function submitProjectAction(projectId: string): Promise<FormState>
   }
   refresh(projectId);
   return { ok: true, message: "Sent for review." };
+}
+
+export async function linkEventAction(projectId: string, _prev: FormState, form: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await linkProjectToEvent(await getDriver(), user.id, projectId, String(form.get("eventId") ?? ""));
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(projectId);
+  revalidatePath("/events", "layout");
+  return { ok: true, message: "Attached to the event." };
+}
+
+/** Bound as (projectId, eventId); React's extra (prev, form) arguments are ignored. Also used to restore a dismissed link. */
+export async function restoreEventAction(projectId: string, eventId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await linkProjectToEvent(await getDriver(), user.id, projectId, eventId);
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(projectId);
+  revalidatePath("/events", "layout");
+  return { ok: true, message: "Restored." };
+}
+
+export async function unlinkEventAction(projectId: string, eventId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await unlinkProjectFromEvent(await getDriver(), user.id, projectId, eventId);
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(projectId);
+  revalidatePath("/events", "layout");
+  return { ok: true, message: "Removed from the event." };
 }
 
 /** Bound as (projectId, commitmentId, to); React's extra (prev, form) arguments are ignored. */

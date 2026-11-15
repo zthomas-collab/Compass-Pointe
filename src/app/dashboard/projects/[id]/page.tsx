@@ -3,13 +3,18 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   addNeedAction,
+  linkEventAction,
   markAttendanceAction,
   removeNeedAction,
+  restoreEventAction,
   setProjectStatusAction,
   submitProjectAction,
+  unlinkEventAction,
   updateNeedAction,
   updateProjectAction,
 } from "@/app/dashboard/projects/actions";
+import { LinkEventForm } from "@/components/event-link-forms";
+import { EventStatusBadge } from "@/components/event-status";
 import { ActionButton, NeedForm, ProjectForm } from "@/components/project-forms";
 import { ProjectStatusBadge } from "@/components/project-status";
 import { PROJECT_AUDIENCE_LABELS, type ProjectStatus } from "@/lib/projects";
@@ -18,6 +23,7 @@ import { listCounties } from "@/server/modules/counties";
 import { getOrganizationProfile } from "@/server/modules/directory";
 import { AppError } from "@/server/errors";
 import { getProjectForEditor } from "@/server/modules/projects";
+import { listLinkableEvents, listProjectEventLinks } from "@/server/modules/eventlinks";
 import { listRoster, type RosterRow } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 
@@ -51,6 +57,7 @@ export default async function ProjectEditorPage({
   const project = await getProjectForEditor(db, user.id, id);
   if (!project) notFound();
   // The roster holds volunteers' contact details: only org editors, the county's administrators and executives get it.
+  const [eventLinks, linkable] = await Promise.all([listProjectEventLinks(db, user.id, id), listLinkableEvents(db, user.id, id)]);
   let roster: RosterRow[] | null = null;
   try {
     roster = await listRoster(db, user.id, id);
@@ -106,6 +113,37 @@ export default async function ProjectEditorPage({
             <div className="mt-1 whitespace-pre-line">{project.description}</div>
             {project.privateLocationNotes && <div className="mt-1"><dt className="inline font-medium">Private location notes:</dt> <dd className="inline">{project.privateLocationNotes}</dd></div>}
           </dl>
+        )}
+      </section>
+
+      <section className="card mt-5 p-4" aria-labelledby="events-h">
+        <h2 id="events-h" className="text-lg font-semibold">Disaster events</h2>
+        <p className="mt-1 text-sm text-muted">
+          Attaching this project to an event lists it on that event&apos;s public page (once the project is open) so people helping in that area can find it.
+          A county administrator can remove a project that does not belong.
+        </p>
+        <ul className="mt-3 divide-y divide-line">
+          {eventLinks.map((l) => (
+            <li key={l.eventId} className="grid gap-2 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
+              <div>
+                <Link className="font-medium text-brand underline" href={`/events/${l.eventSlug}`}>{l.eventName}</Link>{" "}
+                <EventStatusBadge status={l.eventStatus} />
+                {l.state === "DISMISSED" && <span className="badge tone-muted"><span aria-hidden="true">✕</span> Removed</span>}
+                {l.state === "CONFIRMED" && !l.inArea && (
+                  <p className="text-sm text-bad">This project is no longer inside the event&apos;s area, so it is not shown there.</p>
+                )}
+                {l.state === "DISMISSED" && !l.canRelink && <p className="text-sm text-muted">A county administrator removed this project from the event.</p>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {l.canUnlink && <ActionButton action={unlinkEventAction.bind(null, project.id, l.eventId)} label="Remove from this event" />}
+                {l.canRelink && <ActionButton action={restoreEventAction.bind(null, project.id, l.eventId)} label="Restore" className="btn btn-primary" />}
+              </div>
+            </li>
+          ))}
+          {eventLinks.length === 0 && <li className="py-3 text-sm text-muted">This project is not attached to any event.</li>}
+        </ul>
+        {linkable.length > 0 && (
+          <div className="mt-3"><LinkEventForm action={linkEventAction.bind(null, project.id)} events={linkable} /></div>
         )}
       </section>
 
