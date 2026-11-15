@@ -19,7 +19,7 @@ So a resident cannot currently register, apply, upload or track anything, and st
 | # | Directive item | State | Evidence / what is missing |
 |---|---|---|---|
 | 1 | Executive dashboard | **Partial** | `/admin`, `/admin/counties`, `/admin/organizations`, `/admin/profiles` exist (counties, county-admin assignment, org verification/suspension, profile approval). Missing: metrics dashboard, events, projects, intake, settings UI, reports. No hard-coded stats exist because no stats exist. |
-| 1 | Events + logistics (calendar, task board, table) | **Missing** | No `events`, `event_tasks` tables or pages. |
+| 1 | Events (disaster areas) | **Stage 1 done** | Redefined: an event is a named disaster area (counties, optional ZIPs), not a task board. Migration `0013`, `/admin/events`, public `/events` with the Help list. The old `event_tasks`/`event_assignments` task board is **superseded** (see `docs/superpowers/specs/2026-11-15-events-and-projects-design.md`). Missing: the event **Needs** list, which depends on projects. |
 | 2 | Org profiles, logo, website, socials, counties served, approval | **Done** | Phase 1; tests in `crisis-compass-foundation.test.ts`. Missing vs directive: operating hours on profile, upcoming events, educational materials on profile, ZIPs served (only counties). |
 | 2 | Public directory (search/filter/profile) | **Done / Partial** | `/contacts` searches name, type, ZIP+radius; `/orgs/[id]` profile. Missing: county filter, resource-category filter, publicly listed resources on the profile. |
 | 3 | Branding | **Done (this session)** | Official logo, tokens, fonts, header. Open: no favicon/manifest icon from the official mark (needs a small-size original); no browser visual QA yet; executive/county dashboards not distinct. |
@@ -56,7 +56,7 @@ So a resident cannot currently register, apply, upload or track anything, and st
 | 2b | ZIP↔county crosswalk import + disambiguation in forms and routing | 0011 `zip_county` | `zip_codes`, `zips:import` |
 | 4a | Volunteer/donation offers: form, reference numbers, executive intake, status flow, configurable destination email in settings, queued email | 0012 `contribution_offers`, `volunteer_profiles`, settings keys | `platform_settings`, notifications |
 | 4b | Community projects: needs, quantities (requested/offered/accepted/dispatched/received/verified), commitments, delivery confirmation, match suggestions (suggest only, never auto-commit), public generalized view | 0013 | PostGIS, service areas |
-| 5 | Events, tasks, assignments, calendar/board/table | 0014 | counties, orgs |
+| 5 | Events as disaster areas (stage 1, done in 0013); projects, needs, sign-up, event links (stages 2-6, see the design doc) | 0013 (done), then 0014+ | counties, orgs, public resource views |
 | 5 | Executive, county, nonprofit dashboards from real queries | views only | everything above |
 | 6 | `/learn` library with moderation, URL allow-list, CSP `frame-src` | 0015 | org profiles |
 | 6 | Accessibility, performance, security, rollback validation | none | |

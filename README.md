@@ -9,7 +9,8 @@ Not a CRM, case-management or emergency-dispatch system. The map shows resources
 ## Crisis Compass upgrade
 
 - ✅ **Phase 1 (foundation):** configurable Crisis Compass branding and theme (`src/config/brand.ts`, `BRAND_*` env vars), County Administrator role scoped to assigned counties, organization profiles with logo, website, social links and counties served, administrator approval/hide of public profiles, public profile pages at `/orgs/<id>`
-- ⏳ Phases 2-4 (public assistance pipeline, volunteers/donations/projects, video library/events/reports): blocked on decisions and inputs listed in the plan, notably the **scope conflict** with the repository's "no requests for help or beneficiary data" rule.
+- ✅ **Events (disaster areas), stage 1:** executives create events made of counties (optionally narrowed to ZIPs) and move them DRAFT → ACTIVE → RECOVERY → CLOSED at `/admin/events`; the public browses `/events` and `/events/<slug>`, where each event lists the **help** (public resource sites) inside its area. Drafts are hidden at the database level; closed events stay public as an archive. Design: [events and projects](docs/superpowers/specs/2026-11-15-events-and-projects-design.md).
+- ⏳ **Next stages** (projects with volunteer/goods needs, sign-up, event-project links, goods pledges): see the [Stage 1 plan](docs/superpowers/plans/2026-11-15-events-stage-1.md) and the design's delivery stages. Phase 2 (assistance pipeline) and volunteer/donation intake are built; see the gap analysis for what remains.
 
 ## Status of the original vertical slice
 
@@ -23,7 +24,7 @@ First vertical slice (Phases 0–2 + part of 3):
 - ✅ One photo per location (re-encoded, GPS/EXIF stripped), shown to exactly the people who can see the location
 - ✅ Public **Contacts** at `/contacts` (the spec's Black Book): approved organizations that opted in, searchable by name, description, type and ZIP code with a radius filter — no sign-in
 - ✅ Brand palette, status colors with icons + text, full map key (axe: 0 violations); brand now configurable (see above)
-- ✅ 103 automated tests against real PostgreSQL 18 + PostGIS 3.6 (PGlite)
+- ✅ 204 automated tests against real PostgreSQL 18 + PostGIS 3.6 (PGlite)
 - ⏳ Road reports, restricted (authorized-only) contacts, dashboards, notification worker, managed auth/MFA — see [milestones](docs/05-milestones-acceptance.md)
 
 **Not production-ready.** Authentication is a development adapter, no email leaves the machine, and the basemap is a free no-SLA provider. See [assumptions & risks](docs/01-assumptions-risks.md).
