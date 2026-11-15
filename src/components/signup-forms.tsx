@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import type { FormState } from "@/app/auth/actions";
+import { VOLUNTEER_PATHS } from "@/lib/volunteer-paths";
 import { Field, FieldError, FormMessage, SubmitButton } from "./forms";
 
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
@@ -9,7 +11,14 @@ type Action = (prev: FormState, form: FormData) => Promise<FormState>;
 /** Public volunteer sign-up for one role. No account; the volunteer confirms from an emailed link. */
 export function SignUpForm({ action, orgName }: { action: Action; orgName: string }) {
   const [state, formAction] = useActionState(action, {});
-  if (state.ok) return <p role="status" className="rounded-md bg-ok-bg p-3 text-sm text-ok">{state.message}</p>;
+  if (state.ok) {
+    return (
+      <div role="status" className="rounded-md bg-ok-bg p-3 text-sm text-ok">
+        <p>{state.message}</p>
+        <p className="mt-2"><Link className="underline" href={VOLUNTEER_PATHS.shifts}>See other shifts</Link></p>
+      </div>
+    );
+  }
   return (
     <form action={formAction} className="grid gap-3 sm:grid-cols-2">
       <div className="sm:col-span-2"><FormMessage state={state} /></div>
