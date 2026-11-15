@@ -318,3 +318,124 @@ export async function removeNeed(driver: Driver, userId: string, needId: string)
     throw fromDbError(err);
   }
 }
+
+/** Moves an organization may make itself. Review decisions are separate (reviewProject); content edits reset to review. */
+export const PROJECT_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
+  DRAFT: ["CANCELLED"],
+  PENDING_REVIEW: [],
+  OPEN: ["PAUSED", "COMPLETED", "CANCELLED"],
+  PAUSED: ["OPEN", "COMPLETED", "CANCELLED"],
+  COMPLETED: [],
+  CANCELLED: [],
+};
+
+/** Lock a project and require an org editor, without restricting its status (callers check the transition). */
+async function lockProjectForEditor(tx: Tx, userId: string, projectId: string): Promise<LockedProject> {
+  const rows = await tx.query<LockedProject>(`SELECT id, org_id, status FROM projects WHERE id = $1 FOR UPDATE`, [projectId]);
+  if (!rows.length) throw new AppError("NOT_FOUND", "Project not found.");
+  await assertOrgEditor(tx, userId, rows[0].org_id);
+  return rows[0];
+}
+
+/** Org editor: send a DRAFT project for review. It needs at least one need. */
+export async function submitProject(driver: Driver, userId: string, id: string): Promise<void> {
+  const projectId = uuid(id);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const p = await lockProjectForEditor(tx, userId, projectId);
+      if (p.status !== "DRAFT") throw new AppError("VALIDATION", `A project that is ${p.status} cannot be submitted.`);
+      const n = await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM project_needs WHERE project_id = $1`, [projectId]);
+      if (n[0].n < 1) throw new AppError("VALIDATION", "Add at least one need before submitting for review.");
+      await tx.query(`UPDATE projects SET status = 'PENDING_REVIEW', review_note = NULL WHERE id = $1`, [projectId]);
+      await writeAudit(tx, {
+        actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_SUBMITTED", subjectType: "project", subjectId: projectId,
+      });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+export const projectReviewSchema = z.object({
+  decision: z.enum(["APPROVE", "RETURN"]),
+  note: z.string().trim().min(5, "Add a short note").max(2000),
+});
+
+/**
+ * Executive or a county administrator of the project's county: approve (publish) or return a pending project.
+ * Nobody reviews their own organization's project.
+ */
+export async function reviewProject(driver: Driver, actorId: string, id: string, raw: unknown): Promise<void> {
+  const projectId = uuid(id);
+  const input = parseOrThrow(projectReviewSchema, raw);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const rows = await tx.query<LockedProject & { county_id: string }>(
+        `SELECT id, org_id, status, county_id FROM projects WHERE id = $1 FOR UPDATE`,
+        [projectId],
+      );
+      if (!rows.length) throw new AppError("NOT_FOUND", "Project not found.");
+      const p = rows[0];
+      const access = await loadAccess(tx, actorId);
+      if (!canManageCounty(access, p.county_id)) throw new AppError("FORBIDDEN", "You do not administer this project's county.");
+      if (await membershipRole(tx, p.org_id, actorId)) {
+        throw new AppError("FORBIDDEN", "You cannot review your own organization's project.");
+      }
+      if (p.status !== "PENDING_REVIEW") throw new AppError("VALIDATION", `A project that is ${p.status} is not waiting for review.`);
+      if (input.decision === "APPROVE") {
+        const org = await tx.query<{ ok: boolean }>(
+          `SELECT (status = 'APPROVED' AND NOT publication_suspended) AS ok FROM organizations WHERE id = $1`,
+          [p.org_id],
+        );
+        if (!org[0]?.ok) throw new AppError("VALIDATION", "The organization is not currently approved to publish.");
+      }
+      await tx.query(
+        `UPDATE projects SET status = $2, review_note = $3, reviewed_by = $4, reviewed_at = now() WHERE id = $1`,
+        [projectId, input.decision === "APPROVE" ? "OPEN" : "DRAFT", input.decision === "RETURN" ? input.note : null, actorId],
+      );
+      await writeAudit(tx, {
+        actorUserId: actorId, actorOrgId: p.org_id, action: input.decision === "APPROVE" ? "PROJECT_APPROVED" : "PROJECT_RETURNED",
+        subjectType: "project", subjectId: projectId, details: { note: input.note },
+      });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+/** Org editor: pause, resume, complete or cancel. None of these change content, so none go back to review. */
+export async function setProjectStatus(driver: Driver, userId: string, id: string, to: ProjectStatus): Promise<void> {
+  const projectId = uuid(id);
+  const target = parseOrThrow(z.enum(["DRAFT", "PENDING_REVIEW", "OPEN", "PAUSED", "COMPLETED", "CANCELLED"]), to);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const p = await lockProjectForEditor(tx, userId, projectId);
+      if (!PROJECT_TRANSITIONS[p.status].includes(target)) {
+        throw new AppError("VALIDATION", `A project cannot move from ${p.status} to ${target}.`);
+      }
+      await tx.query(`UPDATE projects SET status = $2 WHERE id = $1`, [projectId, target]);
+      await writeAudit(tx, {
+        actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_STATUS_CHANGED", subjectType: "project", subjectId: projectId,
+        details: { from: p.status, to: target },
+      });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
+
+/** Reviewers: projects waiting for review. Executives see all; county administrators only their counties. */
+export async function listProjectsForReview(driver: Driver, actorId: string): Promise<ProjectRow[]> {
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    const access = await loadAccess(tx, actorId);
+    if (!access.executive && access.countyIds.length === 0) throw new AppError("FORBIDDEN", "You do not review projects.");
+    const rows = await tx.query<DbProject>(
+      `${PROJECT_SELECT} WHERE p.status = 'PENDING_REVIEW' AND ($1::boolean OR p.county_id = ANY($2::uuid[]))
+        ORDER BY p.updated_at, p.id`,
+      [access.executive, access.countyIds],
+    );
+    const out: ProjectRow[] = [];
+    for (const r of rows) out.push(toProject(r, await loadNeeds(tx, r.id)));
+    return out;
+  });
+}

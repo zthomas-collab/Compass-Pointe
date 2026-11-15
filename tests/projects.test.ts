@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
-import { addNeed, createProject, getProjectForEditor, listOrgProjects, removeNeed, updateNeed, updateProject } from "@/server/modules/projects";
+import {
+  addNeed, createProject, getProjectForEditor, listOrgProjects, listProjectsForReview, removeNeed, reviewProject, setProjectStatus,
+  submitProject, updateNeed, updateProject,
+} from "@/server/modules/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
 
@@ -210,5 +213,108 @@ describe("people needs", () => {
     await addNeed(db, u.admin, id, need({ title: "Later shift", startsAt: "2026-12-07T08:00:00Z", endsAt: "2026-12-07T12:00:00Z" }));
     await addNeed(db, u.admin, id, need({ title: "Earlier shift", startsAt: "2026-12-06T08:00:00Z", endsAt: "2026-12-06T12:00:00Z" }));
     expect((await needs(id)).map((n) => n.title)).toEqual(["Earlier shift", "Later shift", "No shift set"]);
+  });
+});
+
+describe("submit, review, and status", () => {
+  const need = { title: "Volunteer crew", slotsNeeded: 5 };
+  const mk = async (title: string, withNeed = true, org = orgA, by = u.admin, county = buncombe, zip = "28801") => {
+    const id = await createProject(db, by, org, base({ title, countyId: county, zip }));
+    if (withNeed) await addNeed(db, by, id, need);
+    return id;
+  };
+  const get = async (id: string) => (await getProjectForEditor(db, exec, id))!;
+  const audited = async (id: string, action: string) =>
+    (await sys((tx) => tx.query(`SELECT 1 FROM audit_logs WHERE action = $1 AND subject_id = $2`, [action, id]))).length;
+  const approve = (who: string, id: string) => reviewProject(db, who, id, { decision: "APPROVE", note: "Looks good to publish" });
+
+  it("walks DRAFT to PENDING_REVIEW to OPEN with a reviewer, and audits each step", async () => {
+    const id = await mk("Project to approve");
+    await submitProject(db, u.editor, id);
+    expect((await get(id)).status).toBe("PENDING_REVIEW");
+    await approve(u.caB, id);
+    expect((await get(id)).status).toBe("OPEN");
+    const r = await sys((tx) => tx.query<{ reviewed_by: string; reviewed_at: Date | null }>(`SELECT reviewed_by, reviewed_at FROM projects WHERE id = $1`, [id]));
+    expect(r[0].reviewed_by).toBe(u.caB);
+    expect(r[0].reviewed_at).not.toBeNull();
+    expect(await audited(id, "PROJECT_SUBMITTED")).toBe(1);
+    expect(await audited(id, "PROJECT_APPROVED")).toBe(1);
+  });
+
+  it("refuses to submit a project with no needs", async () => {
+    const id = await mk("Project without needs", false);
+    await expect(submitProject(db, u.admin, id)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await get(id)).status).toBe("DRAFT");
+    await expect(submitProject(db, u.viewer, id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("returns a project to draft with a note, and requires a real note", async () => {
+    const id = await mk("Project to return");
+    await submitProject(db, u.admin, id);
+    await expect(reviewProject(db, u.caB, id, { decision: "RETURN", note: "no" })).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await get(id)).status).toBe("PENDING_REVIEW");
+    await reviewProject(db, u.caB, id, { decision: "RETURN", note: "Please remove the street address" });
+    expect(await get(id)).toMatchObject({ status: "DRAFT", reviewNote: "Please remove the street address" });
+    expect(await audited(id, "PROJECT_RETURNED")).toBe(1);
+  });
+
+  it("limits review to the executive and the project's county administrators", async () => {
+    const id = await mk("Project for review limits");
+    await submitProject(db, u.admin, id);
+    for (const who of [u.caH, u.admin, u.editor, u.plain]) {
+      await expect(approve(who, id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect((await get(id)).status).toBe("PENDING_REVIEW");
+    await approve(exec, id);
+    expect((await get(id)).status).toBe("OPEN");
+    await expect(approve(exec, id)).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("does not let a county administrator approve their own organization's project", async () => {
+    const dual = await makeUser(db, "dual@example.test");
+    await sys((tx) => tx.query(`INSERT INTO organization_memberships (org_id, user_id, role, status) VALUES ($1, $2, 'EDITOR', 'ACTIVE')`, [orgA, dual]));
+    await assignCountyAdmin(db, exec, { email: "dual@example.test", countyId: buncombe, reason: "Dual role coordinator" });
+    const id = await mk("Project by dual-role org");
+    await submitProject(db, u.admin, id);
+    await expect(approve(dual, id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await get(id)).status).toBe("PENDING_REVIEW");
+    await approve(u.caB, id);
+    expect((await get(id)).status).toBe("OPEN");
+  });
+
+  it("scopes the review queue by county", async () => {
+    const hOrg = await makeOrg(db, { name: "Henderson Org", members: [{ userId: u.other, role: "EDITOR" }] });
+    await sys((tx) => tx.query(`INSERT INTO organization_counties (org_id, county_id) VALUES ($1, $2)`, [hOrg, henderson]));
+    const hp = await mk("Henderson project in queue", true, hOrg, u.other, henderson, hendersonZip);
+    await submitProject(db, u.other, hp);
+    const bp = await mk("Buncombe project in queue");
+    await submitProject(db, u.admin, bp);
+    const ids = async (who: string) => (await listProjectsForReview(db, who)).map((p) => p.id);
+    expect(await ids(u.caB)).toContain(bp);
+    expect(await ids(u.caB)).not.toContain(hp);
+    expect(await ids(u.caH)).toContain(hp);
+    expect(await ids(u.caH)).not.toContain(bp);
+    expect(await ids(exec)).toEqual(expect.arrayContaining([bp, hp]));
+    const queue = await listProjectsForReview(db, exec);
+    expect(queue.every((p) => p.status === "PENDING_REVIEW")).toBe(true);
+    expect(queue.find((p) => p.id === bp)!.needs).toHaveLength(1);
+    await expect(listProjectsForReview(db, u.admin)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("pauses, resumes, completes and cancels without going back to review", async () => {
+    const id = await mk("Project for status moves");
+    await submitProject(db, u.admin, id);
+    await approve(exec, id);
+    for (const to of ["PAUSED", "OPEN", "PAUSED", "COMPLETED"] as const) {
+      await setProjectStatus(db, u.editor, id, to);
+      expect((await get(id)).status).toBe(to);
+    }
+    await expect(setProjectStatus(db, u.editor, id, "OPEN")).rejects.toMatchObject({ code: "VALIDATION" });
+    const d = await mk("Draft cannot jump to open");
+    await expect(setProjectStatus(db, u.admin, d, "OPEN")).rejects.toMatchObject({ code: "VALIDATION" });
+    await setProjectStatus(db, u.admin, d, "CANCELLED");
+    expect((await get(d)).status).toBe("CANCELLED");
+    await expect(setProjectStatus(db, u.viewer, d, "CANCELLED")).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await audited(id, "PROJECT_STATUS_CHANGED")).toBe(4);
   });
 });
