@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import nextConfig from "../next.config";
-import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS, parseOfferType } from "@/lib/offers";
+import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS, donateViewFor, parseOfferType } from "@/lib/offers";
 import { VOLUNTEER_PATHS, donatePath, shiftPath } from "@/lib/volunteer-paths";
 import { OFFER_TYPES as SERVER_OFFER_TYPES } from "@/server/modules/offers";
 
@@ -69,5 +69,32 @@ describe("no stale links to the old project paths", () => {
 
   it("no longer keeps pages under src/app/projects", () => {
     expect(existsSync(path.resolve(__dirname, "../src/app/projects"))).toBe(false);
+  });
+});
+
+describe("donate chooser", () => {
+  it("shows the form only for exactly one valid type, otherwise the chooser", () => {
+    expect(donateViewFor("FOOD")).toEqual({ mode: "form", type: "FOOD" });
+    for (const code of OFFER_TYPES) expect(donateViewFor(code)).toEqual({ mode: "form", type: code });
+    for (const bad of [undefined, "", "nope", "food", " FOOD", ["FOOD"], ["FOOD", "OTHER"], ["FOOD", "FOOD"]]) {
+      expect(donateViewFor(bad as string | string[] | undefined)).toEqual({ mode: "chooser" });
+    }
+  });
+
+  it("gives every offer type a distinct chooser link and specific hints", () => {
+    const links = OFFER_TYPES.map((c) => donatePath(c));
+    expect(new Set(links).size).toBe(OFFER_TYPES.length);
+    OFFER_TYPES.forEach((c, i) => expect(links[i]).toContain(`type=${c}`));
+    for (const field of ["quantityHint", "unitHint", "description"] as const) {
+      const values = OFFER_TYPES.map((c) => OFFER_TYPE_INFO[c][field]);
+      expect(values.every((v) => v.length > 0)).toBe(true);
+      expect(new Set(values).size).toBe(values.length);
+    }
+  });
+
+  it("steers volunteer-type offers to shifts and nobody else, while keeping their form reachable", () => {
+    expect(OFFER_TYPES.filter((c) => OFFER_TYPE_INFO[c].steerToShifts)).toEqual(["VOLUNTEER_LABOR", "PROFESSIONAL_SKILLS"]);
+    expect(donateViewFor("VOLUNTEER_LABOR")).toEqual({ mode: "form", type: "VOLUNTEER_LABOR" });
+    expect(donateViewFor("PROFESSIONAL_SKILLS")).toEqual({ mode: "form", type: "PROFESSIONAL_SKILLS" });
   });
 });

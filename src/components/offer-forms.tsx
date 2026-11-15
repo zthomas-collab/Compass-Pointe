@@ -7,7 +7,21 @@ import { Field, FieldError, FormMessage, SubmitButton } from "./forms";
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
 type County = { id: string; name: string; state: string };
 
-export function OfferForm({ action, counties, types }: { action: Action; counties: County[]; types: { code: string; label: string }[] }) {
+export function OfferForm({
+  action,
+  counties,
+  types,
+  defaultType,
+  typeHints,
+}: {
+  action: Action;
+  counties: County[];
+  types: { code: string; label: string }[];
+  /** Preselects what is being offered (the donate chooser passes the card the person picked). */
+  defaultType?: string;
+  /** Hints for the quantity and unit fields that fit the chosen type. */
+  typeHints?: { quantityHint: string; unitHint: string };
+}) {
   const [state, formAction] = useActionState(action, {});
   return (
     <form action={formAction} className="grid gap-4">
@@ -18,15 +32,15 @@ export function OfferForm({ action, counties, types }: { action: Action; countie
       </div>
       <label className="field">
         <span>What can you offer?</span>
-        <select className="input" name="contributionType" required defaultValue="">
+        <select className="input" name="contributionType" required defaultValue={defaultType ?? ""}>
           <option value="" disabled>Choose one</option>
           {types.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
         </select>
         <FieldError state={state} name="contributionType" />
       </label>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Quantity or capacity (optional)" name="quantity" state={state} type="number" min="0" step="any" hint="For example 200, or 6 volunteers." />
-        <Field label="Unit (optional)" name="unit" state={state} maxLength={40} hint="cases, pallets, hours, people…" />
+        <Field label="Quantity or capacity (optional)" name="quantity" state={state} type="number" min="0" step="any" hint={typeHints?.quantityHint ?? "For example 200, or 6 volunteers."} />
+        <Field label="Unit (optional)" name="unit" state={state} maxLength={40} hint={typeHints?.unitHint ?? "cases, pallets, hours, people…"} />
       </div>
       <label className="field">
         <span>Describe your offer</span>

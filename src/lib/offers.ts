@@ -107,6 +107,17 @@ export const OFFER_TYPE_INFO: Record<OfferType, OfferTypeInfo> = {
   },
 };
 
+export type DonateView = { mode: "chooser" } | { mode: "form"; type: OfferType };
+
+/**
+ * What /volunteer/donate shows for its `?type=` address value: the form when it is exactly one valid code, otherwise the
+ * chooser (an unknown, repeated or empty value is never an error and never a wrong preselection).
+ */
+export function donateViewFor(raw: string | string[] | undefined): DonateView {
+  const type = parseOfferType(raw);
+  return type ? { mode: "form", type } : { mode: "chooser" };
+}
+
 /** An offer type from an address or form, accepted only when it is exactly one code (never an array, case variant or padded string). */
 export function parseOfferType(value: unknown): OfferType | null {
   return typeof value === "string" && (OFFER_TYPES as readonly string[]).includes(value) ? (value as OfferType) : null;
