@@ -34,6 +34,8 @@ export type ProjectRow = {
   status: ProjectStatus;
   privateLocationNotes: string | null;
   reviewNote: string | null;
+  /** True when the reader is an editor of the owning org and the org may currently publish. Drives which controls the UI shows. */
+  canEdit: boolean;
   needs: NeedRow[];
 };
 
@@ -156,6 +158,7 @@ export async function updateProject(driver: Driver, userId: string, id: string, 
 type DbProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_id: string; county_name: string;
   state: string; zip: string; audience: string; status: ProjectStatus; private_location_notes: string | null; review_note: string | null;
+  org_ok: boolean;
 };
 type DbNeed = {
   id: string; title: string; details: string | null; urgency: "NORMAL" | "URGENT"; slots_needed: number;
@@ -164,7 +167,8 @@ type DbNeed = {
 
 export const PROJECT_SELECT = `
   SELECT p.id, p.org_id, o.display_name AS org_name, p.title, p.description, p.county_id, c.name AS county_name, c.state,
-         p.zip, p.audience, p.status, p.private_location_notes, p.review_note
+         p.zip, p.audience, p.status, p.private_location_notes, p.review_note,
+         (o.status = 'APPROVED' AND NOT o.publication_suspended) AS org_ok
     FROM projects p JOIN organizations o ON o.id = p.org_id JOIN counties c ON c.id = p.county_id`;
 
 const toNeed = (n: DbNeed): NeedRow => ({
@@ -174,10 +178,11 @@ const toNeed = (n: DbNeed): NeedRow => ({
   skills: n.skills, instructions: n.instructions,
 });
 
-const toProject = (p: DbProject, needs: NeedRow[]): ProjectRow => ({
+const toProject = (p: DbProject, needs: NeedRow[], role: string | null = null): ProjectRow => ({
   id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyId: p.county_id,
   countyName: p.county_name, state: p.state, zip: p.zip, audience: p.audience, status: p.status,
-  privateLocationNotes: p.private_location_notes, reviewNote: p.review_note, needs,
+  privateLocationNotes: p.private_location_notes, reviewNote: p.review_note,
+  canEdit: p.org_ok && (role === "ORG_ADMIN" || role === "EDITOR"), needs,
 });
 
 export async function loadNeeds(tx: Tx, projectId: string): Promise<NeedRow[]> {
@@ -201,7 +206,7 @@ export async function getProjectForEditor(driver: Driver, userId: string, id: st
     const access = await loadAccess(tx, userId);
     const member = await membershipRole(tx, rows[0].org_id, userId);
     if (!member && !canManageCounty(access, rows[0].county_id)) return null;
-    return toProject(rows[0], await loadNeeds(tx, id));
+    return toProject(rows[0], await loadNeeds(tx, id), member);
   });
 }
 
@@ -209,9 +214,10 @@ export async function getProjectForEditor(driver: Driver, userId: string, id: st
 export async function listOrgProjects(driver: Driver, userId: string, orgId: string): Promise<ProjectRow[]> {
   const org = uuid(orgId);
   return runIn(driver, { kind: "system" }, async (tx) => {
-    if (!(await membershipRole(tx, org, userId))) throw new AppError("FORBIDDEN", "You are not a member of this organization.");
+    const role = await membershipRole(tx, org, userId);
+    if (!role) throw new AppError("FORBIDDEN", "You are not a member of this organization.");
     const rows = await tx.query<DbProject>(`${PROJECT_SELECT} WHERE p.org_id = $1 ORDER BY p.created_at DESC, p.id`, [org]);
-    return rows.map((r) => toProject(r, []));
+    return rows.map((r) => toProject(r, [], role));
   });
 }
 

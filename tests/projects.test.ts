@@ -6,6 +6,7 @@ import {
   addNeed, createProject, getProjectForEditor, listOrgProjects, listProjectsForReview, removeNeed, reviewProject, setProjectStatus,
   getPublicProject, searchProjects, submitProject, updateNeed, updateProject,
 } from "@/server/modules/projects";
+import { eastern, easternLocalToIso, isoToEasternLocal } from "@/lib/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
 
@@ -113,6 +114,20 @@ describe("project creation and editing", () => {
     const id = await createProject(db, u.admin, orgA, base({ title: "Scoped read project" }));
     for (const who of [u.editor, u.viewer, u.caB, exec]) expect((await getProjectForEditor(db, who, id))?.id).toBe(id);
     for (const who of [u.caH, u.other, u.plain]) expect(await getProjectForEditor(db, who, id)).toBeNull();
+  });
+
+  it("reports whether the reader may edit the project", async () => {
+    const id = await createProject(db, u.admin, orgA, base({ title: "Project for canEdit flag" }));
+    const can = async (who: string) => (await getProjectForEditor(db, who, id))!.canEdit;
+    expect(await can(u.admin)).toBe(true);
+    expect(await can(u.editor)).toBe(true);
+    expect(await can(u.viewer)).toBe(false);
+    expect(await can(u.caB)).toBe(false);
+    expect(await can(exec)).toBe(false);
+    expect((await listOrgProjects(db, u.viewer, orgA)).every((p) => p.canEdit === false)).toBe(true);
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = true WHERE id = $1`, [orgA]));
+    expect(await can(u.admin)).toBe(false);
+    await sys((tx) => tx.query(`UPDATE organizations SET publication_suspended = false WHERE id = $1`, [orgA]));
   });
 
   it("lists an org's projects for its members only", async () => {
@@ -429,5 +444,22 @@ describe("public projects", () => {
     await expect(searchProjects(db, { zip: "abc" })).rejects.toMatchObject({ code: "VALIDATION" });
     await expect(searchProjects(db, { zip: "28801", radius: 7 })).rejects.toMatchObject({ code: "VALIDATION" });
     await expect(searchProjects(db, { countyId: "nope" })).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+});
+
+describe("shift times are entered and shown in Eastern Time", () => {
+  it("converts a local Eastern time to UTC across daylight saving", () => {
+    expect(eastern).toBe("America/New_York");
+    expect(easternLocalToIso("2026-12-06T08:00")).toBe("2026-12-06T13:00:00.000Z");
+    expect(easternLocalToIso("2026-07-04T08:00")).toBe("2026-07-04T12:00:00.000Z");
+  });
+
+  it("round-trips back to the local value, and leaves empty or invalid input alone", () => {
+    for (const local of ["2026-12-06T08:00", "2026-07-04T23:30", "2026-03-08T12:15", "2026-11-01T09:45"]) {
+      expect(isoToEasternLocal(easternLocalToIso(local))).toBe(local);
+    }
+    expect(easternLocalToIso("")).toBe("");
+    expect(easternLocalToIso("not a date")).toBe("not a date");
+    expect(isoToEasternLocal(null)).toBe("");
   });
 });
