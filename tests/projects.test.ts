@@ -413,6 +413,15 @@ describe("public projects", () => {
     expect(await titles({ q: "nothingmatchesthis" })).toEqual([]);
   });
 
+  it("treats % and _ in a search as plain characters, not wildcards", async () => {
+    await open("Public Case 100% effort_team", { needTitle: "Wildcard role" });
+    await open("Public Case 100 percent effortXteam", { needTitle: "Plain role" });
+    expect(await titles({ q: "100%" })).toEqual(["Public Case 100% effort_team"]);
+    expect(await titles({ q: "effort_team" })).toEqual(["Public Case 100% effort_team"]);
+    expect(await titles({ q: "effort\\team" })).toEqual([]);
+    expect(await titles({ q: "%" })).toEqual(["Public Case 100% effort_team"]);
+  });
+
   it("sorts by distance for a ZIP and honors the radius", async () => {
     await sys((tx) =>
       tx.query(

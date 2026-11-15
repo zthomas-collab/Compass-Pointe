@@ -529,7 +529,7 @@ export const projectSearchSchema = z.object({
 });
 
 const METERS_PER_MILE = 1609.344;
-const likePattern = (q: string) => `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
+const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 type DbPublicProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
