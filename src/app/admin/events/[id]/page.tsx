@@ -62,7 +62,18 @@ export default async function AdminEventPage({
 
       <section className="card mt-5 p-4" aria-labelledby="edit-h">
         <h2 id="edit-h" className="mb-2 text-lg font-semibold">Details</h2>
-        <EventForm action={updateEventAction.bind(null, event.id)} counties={counties} event={event} />
+        {event.status === "CLOSED" ? (
+          <dl className="grid gap-1 text-sm">
+            <div><dt className="inline font-medium">Started:</dt> <dd className="inline">{event.startsOn}</dd></div>
+            <div><dt className="inline font-medium">Closed:</dt> <dd className="inline">{event.closedOn}</dd></div>
+            <div><dt className="inline font-medium">Counties:</dt> <dd className="inline">{event.counties.map((c) => `${c.name}, ${c.state}`).join("; ")}</dd></div>
+            {event.zips.length > 0 && <div><dt className="inline font-medium">ZIP codes:</dt> <dd className="inline">{event.zips.join(", ")}</dd></div>}
+            {event.summary && <div className="mt-2 whitespace-pre-line">{event.summary}</div>}
+            <p className="mt-2 text-muted">A closed event is an archive and cannot be edited.</p>
+          </dl>
+        ) : (
+          <EventForm action={updateEventAction.bind(null, event.id)} counties={counties} event={event} />
+        )}
       </section>
     </div>
   );

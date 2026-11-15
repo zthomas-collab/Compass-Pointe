@@ -182,6 +182,7 @@ export async function updateEvent(driver: Driver, actorId: string, id: string, r
     await runIn(driver, { kind: "system" }, async (tx) => {
       await assertExecutive(tx, actorId);
       const current = await lockEvent(tx, eventId);
+      if (current.status === "CLOSED") throw new AppError("VALIDATION", "A closed event is an archive and cannot be edited.");
       const slug = resolveSlug(input, current.slug);
       if (slug !== current.slug && current.status !== "DRAFT") {
         throw new AppError("VALIDATION", "Please correct the highlighted fields.", { slug: ["The slug cannot change after an event is activated"] });

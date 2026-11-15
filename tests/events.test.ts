@@ -113,6 +113,16 @@ describe("event status and edits", () => {
     expect(ev.closedOn).toBe(today());
   });
 
+  it("treats a closed event as a read-only archive", async () => {
+    const id = await createEvent(db, exec, base({ name: "Archived Read Only" }));
+    await setEventStatus(db, exec, id, "ACTIVE");
+    await setEventStatus(db, exec, id, "CLOSED");
+    const before = (await getEventAdmin(db, exec, id))!;
+    await expect(updateEvent(db, exec, id, base({ name: "Archived Renamed", slug: before.slug }))).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(updateEvent(db, exec, id, base({ name: "Archived Read Only", slug: before.slug, startsOn: "2027-01-01" }))).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(await getEventAdmin(db, exec, id)).toEqual(before);
+  });
+
   it("rejects illegal jumps", async () => {
     const id = await createEvent(db, exec, base({ name: "Illegal Jumps Event" }));
     await expect(setEventStatus(db, exec, id, "CLOSED")).rejects.toMatchObject({ code: "VALIDATION" });
