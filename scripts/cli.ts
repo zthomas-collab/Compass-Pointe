@@ -8,7 +8,7 @@
  *   npm run notifications:send [-- --watch]   # deliver queued email (needs EMAIL_TRANSPORT=smtp, SMTP_URL, EMAIL_FROM)
  *   npm run mfa:reset -- <email> "<how identity was verified>"   # lost device and no recovery codes
  */
-import { createDriver } from "../src/server/db";
+import { createDriver, type Driver, type Tx } from "../src/server/db";
 import { migrate } from "../src/server/db/migrate";
 import { runIn } from "../src/server/db/context";
 import { grantPlatformRole } from "../src/server/modules/organizations";
@@ -16,6 +16,8 @@ import { operatorResetMfa } from "../src/server/modules/mfa";
 import { processNotificationJobs, queueStats } from "../src/server/modules/notifications";
 import { createTransport } from "../src/server/email";
 import { createResource, createSite } from "../src/server/modules/sites";
+import { addNeed, createProject, submitProject } from "../src/server/modules/projects";
+import { linkProjectToEvent } from "../src/server/modules/eventlinks";
 import { uploadSiteImage } from "../src/server/modules/images";
 import { getObjectStore } from "../src/server/storage";
 import sharp from "sharp";
@@ -118,6 +120,8 @@ async function seed() {
   await res(ids.reliefEditor, "Tree Crew Dispatch Point", { categoryCode: "DEBRIS_REMOVAL", name: "Free tree removal for homeowners", visibility: "PUBLIC", availabilityStatus: "LIMITED" });
   await res(ids.reliefEditor, "Riverside Water Distribution", { categoryCode: "WATER", name: "Bottled water pickup", visibility: "PUBLIC", availabilityStatus: "AVAILABLE", reportedQuantity: "800", quantityUnit: "cases" });
 
+  await seedDemoDisaster(db, ids);
+
   // Synthetic placeholder photos (clearly labelled) so the image feature can be exercised.
   const store = getObjectStore();
   const photo = async (user: string, site: string, color: string) =>
@@ -134,6 +138,69 @@ async function seed() {
   );
   console.log(`Seeded synthetic data: ${sites.length} sites. Synthetic sign-in emails use the example.invalid domain.`);
   await db.close();
+}
+
+/**
+ * The giver path for a demo: an ACTIVE [SYNTHETIC] hurricane over Buncombe County, organizations that accept in-kind
+ * giving (one with an approved "Give money" link), an urgent volunteer project linked to the event, and offers sent to
+ * an organization in several states so its Offers tab is not empty. Everything is synthetic and labelled.
+ */
+async function seedDemoDisaster(db: Driver, ids: { pantryEditor: string; pantry: string; relief: string; clinic: string; casemgmt: string; trees: string; water: string }) {
+  const sys = <T>(fn: (tx: Tx) => Promise<T>) => runIn(db, { kind: "system" }, fn);
+  const orgs = [ids.pantry, ids.relief, ids.clinic, ids.casemgmt, ids.trees, ids.water];
+  const eventId = await sys(async (tx) => {
+    await tx.query(`INSERT INTO counties (name, state, fips) VALUES ('Buncombe', 'NC', '37021') ON CONFLICT (state, name) DO NOTHING`);
+    const county = (await tx.query<{ id: string }>(`SELECT id FROM counties WHERE state = 'NC' AND name = 'Buncombe'`))[0].id;
+    await tx.query(`INSERT INTO organization_counties (org_id, county_id) SELECT unnest($1::uuid[]), $2 ON CONFLICT DO NOTHING`, [orgs, county]);
+    const ev = (await tx.query<{ id: string }>(
+      `INSERT INTO events (name, slug, hazard_type, status, summary, starts_on)
+       VALUES ('[SYNTHETIC] Hurricane demo', 'synthetic-hurricane-demo', 'HURRICANE', 'ACTIVE',
+               'Synthetic demo disaster. Flooding and wind damage across Buncombe County. Not a real event.', current_date - 3)
+       RETURNING id`))[0].id;
+    await tx.query(`INSERT INTO event_counties (event_id, county_id) VALUES ($1, $2)`, [ev, county]);
+    // What each organization accepts from givers, and one approved money link (set, then approved: changing the
+    // link always resets its approval).
+    const accept = (org: string, types: string[]) =>
+      tx.query(`INSERT INTO organization_accepted_offer_types (org_id, offer_type) SELECT $1, unnest($2::text[])`, [org, types]);
+    await accept(ids.relief, ["DRINKING_WATER", "FOOD", "CLEANING_SUPPLIES", "BUILDING_SUPPLIES", "TRANSPORTATION"]);
+    await accept(ids.pantry, ["FOOD", "DRINKING_WATER"]);
+    await accept(ids.water, ["DRINKING_WATER"]);
+    await tx.query(`UPDATE organizations SET donation_url = 'https://example.org/donate' WHERE id = $1`, [ids.relief]);
+    await tx.query(`UPDATE organizations SET donation_url_status = 'APPROVED', donation_url_reviewed_at = now() WHERE id = $1`, [ids.relief]);
+    return ev;
+  });
+
+  // An urgent volunteer project, approved and linked to the event, so "Who's helping" shows open spots.
+  const county = await sys((tx) => tx.query<{ id: string }>(`SELECT id FROM counties WHERE state = 'NC' AND name = 'Buncombe'`)).then((r) => r[0].id);
+  const project = await createProject(db, ids.pantryEditor, ids.pantry, {
+    title: "[SYNTHETIC] Food box packing after the storm",
+    description: "Synthetic demo project. Volunteers pack and hand out food boxes for families affected by the storm.",
+    countyId: county, zip: "28801", audience: "COMMUNITY", privateLocationNotes: "Synthetic: loading dock behind the pantry",
+  });
+  await addNeed(db, ids.pantryEditor, project, { title: "Box packers", slotsNeeded: 12, urgency: "URGENT" });
+  await addNeed(db, ids.pantryEditor, project, { title: "Delivery drivers", slotsNeeded: 4 });
+  await submitProject(db, ids.pantryEditor, project);
+  await sys((tx) => tx.query(`UPDATE projects SET status = 'OPEN', review_note = 'Synthetic demo approval', reviewed_at = now() WHERE id = $1`, [project]));
+  await linkProjectToEvent(db, ids.pantryEditor, project, eventId);
+
+  // Offers givers sent to Mountain Response Network, in different states.
+  await sys(async (tx) => {
+    const offers: [string, string, string, string, string][] = [
+      ["[SYNTHETIC] Dana Giver", "dana.giver@example.invalid", "DRINKING_WATER", "Two pallets of bottled water, can deliver Friday.", "MATCHED"],
+      ["[SYNTHETIC] Lee Giver", "lee.giver@example.invalid", "CLEANING_SUPPLIES", "Forty mucking kits: buckets, gloves, bleach.", "ACCEPTED"],
+      ["[SYNTHETIC] Sam Giver", "sam.giver@example.invalid", "TRANSPORTATION", "Box truck and driver for a day.", "COMPLETED"],
+    ];
+    for (const [name, email, type, description, status] of offers) {
+      const o = (await tx.query<{ id: string }>(
+        `INSERT INTO contribution_offers (contributor_name, email, zip, county_id, contribution_type, description, consent_contact, consent_share,
+                                          organization_id, status, is_synthetic)
+         VALUES ($1, $2, '28801', $3, $4, $5, true, true, $6, $7, true) RETURNING id`,
+        [name, email, county, type, description, ids.relief, status],
+      ))[0].id;
+      await tx.query(
+        `INSERT INTO contribution_offer_events (offer_id, actor_role, event_type, to_status, note) VALUES ($1, 'CONTRIBUTOR', 'SUBMITTED', 'MATCHED', 'Offer sent to an organization.')`, [o]);
+    }
+  });
 }
 
 /**

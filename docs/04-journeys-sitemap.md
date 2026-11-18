@@ -61,7 +61,7 @@ Public
 ├── /volunteer                ✅ Volunteer & donate hub: "How do you want to help?", ZIP search, shifts needed now, quick gifts, how it works
 ├── /volunteer/projects       ✅ Find a shift: search by text, ZIP + radius, county (moved from /projects)
 ├── /volunteer/projects/:id   ✅ Project: volunteer roles, shifts, real spots left, and sign-up (no account)
-├── /volunteer/donate         ✅ Donate: choose what you are giving, then a short form with it preselected (?type=FOOD …)
+├── /volunteer/donate         ✅ Donate: choose what you are giving, then a short form with it preselected (?type=FOOD …); ?org=<id> sends it to that organization, limited to what it accepts
 ├── /volunteer/thanks         ✅ Thank-you after an offer: what happens next, next steps
 ├── /projects, /projects/:id  ↪ permanent redirects to /volunteer/projects (query string kept); no longer in the main navigation
 ├── /volunteer/commitments    ✅ Private emailed link: confirm or cancel a sign-up; confirmed volunteers see where to go
@@ -71,6 +71,7 @@ Authenticated
 ├── /dashboard                ✅ Organization Dashboard + My Staging Locations
 ├── /dashboard/orgs/:id/sites/new  ✅ New staging site
 ├── /dashboard/orgs/:id/projects   ✅ My organization's projects
+├── /dashboard/orgs/:id/offers     ✅ Offers givers sent to my organization (accept, schedule, complete, decline)
 ├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete; volunteer roster and attendance; attach it to disaster events
 ├── /dashboard/sites/:id      ✅ Site detail: inventory, Update Availability, history
 ├── /dashboard/roads/new      ⏳ Submit Road Report
