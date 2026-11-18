@@ -19,10 +19,8 @@ import { ActionButton, NeedForm, ProjectForm } from "@/components/project-forms"
 import { ProjectStatusBadge } from "@/components/project-status";
 import { PROJECT_AUDIENCE_LABELS, type ProjectStatus } from "@/lib/projects";
 import { getDriver } from "@/server/db";
-import { listCounties } from "@/server/modules/counties";
-import { getOrganizationProfile } from "@/server/modules/directory";
 import { AppError } from "@/server/errors";
-import { getProjectForEditor } from "@/server/modules/projects";
+import { getProjectForEditor, listProjectSites } from "@/server/modules/projects";
 import { listLinkableEvents, listProjectEventLinks } from "@/server/modules/eventlinks";
 import { listRoster, type RosterRow } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
@@ -65,11 +63,7 @@ export default async function ProjectEditorPage({
     if (!(err instanceof AppError && err.code === "FORBIDDEN")) throw err;
   }
   const editing = project.canEdit && EDITABLE.includes(project.status);
-  let counties: Awaited<ReturnType<typeof listCounties>> = [];
-  if (editing) {
-    const served = (await getOrganizationProfile(db, user.id, project.orgId).catch(() => null))?.countyIds ?? [];
-    counties = (await listCounties(db)).filter((c) => served.includes(c.id) || c.id === project.countyId);
-  }
+  const sites = editing ? await listProjectSites(db, user.id, project.orgId) : [];
   const s = project.status;
   const act = (to: ProjectStatus) => setProjectStatusAction.bind(null, project.id, to);
   return (
@@ -106,7 +100,7 @@ export default async function ProjectEditorPage({
       <section className="card mt-5 p-4" aria-labelledby="details-h">
         <h2 id="details-h" className="mb-2 text-lg font-semibold">Details</h2>
         {editing ? (
-          <ProjectForm action={updateProjectAction.bind(null, project.id)} counties={counties} project={project} />
+          <ProjectForm action={updateProjectAction.bind(null, project.id)} sites={sites} newSiteHref={`/dashboard/orgs/${project.orgId}/sites/new`} project={project} />
         ) : (
           <dl className="grid gap-1 text-sm">
             <div><dt className="inline font-medium">For:</dt> <dd className="inline">{PROJECT_AUDIENCE_LABELS[project.audience as keyof typeof PROJECT_AUDIENCE_LABELS] ?? project.audience}</dd></div>

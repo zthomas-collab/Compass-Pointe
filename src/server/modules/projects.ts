@@ -31,6 +31,8 @@ export type ProjectRow = {
   countyName: string;
   state: string;
   zip: string;
+  /** The site the project is placed at (its pin on the map); null only for projects created before migration 0019. */
+  siteId: string | null;
   audience: string;
   status: ProjectStatus;
   privateLocationNotes: string | null;
@@ -51,8 +53,8 @@ const optText = (max: number) =>
 export const projectSchema = z.object({
   title: z.string().trim().min(5).max(140),
   description: z.string().trim().min(10).max(4000),
-  countyId: z.string().uuid(),
-  zip: z.string().trim().regex(/^[0-9]{5}$/, "Enter a 5-digit ZIP code"),
+  /** The organization's site the project starts at; county and ZIP are taken from it. */
+  siteId: z.string().uuid("Choose a location"),
   audience: z.enum(PROJECT_AUDIENCES),
   privateLocationNotes: optText(1000),
 });
@@ -74,22 +76,49 @@ async function assertOrgEditor(tx: Tx, userId: string, orgId: string): Promise<v
   }
 }
 
-/** The organization must serve the county, and the ZIP must be a real ZIP inside it. */
-async function assertProjectArea(tx: Tx, orgId: string, countyId: string, zip: string): Promise<void> {
-  const county = await tx.query<{ fips: string | null; served: boolean }>(
-    `SELECT c.fips, EXISTS (SELECT 1 FROM organization_counties oc WHERE oc.org_id = $1 AND oc.county_id = c.id) AS served
-       FROM counties c WHERE c.id = $2 AND c.active`,
-    [orgId, countyId],
+const NOT_COVERED = "This location's ZIP is not in a county we cover";
+const NOT_SERVED = "Your organization's profile does not list this location's county as served";
+
+/**
+ * The site a project starts at: an active site of the same organization whose ZIP lies in a platform county the
+ * organization serves. Returns the county and 5-digit ZIP the project takes from it.
+ */
+async function resolveProjectSite(tx: Tx, orgId: string, siteId: string): Promise<{ countyId: string; zip: string }> {
+  const rows = await tx.query<{ county_id: string | null; zip: string | null; served: boolean }>(
+    `SELECT s.county_id, left(s.postal_code, 5) AS zip,
+            EXISTS (SELECT 1 FROM organization_counties oc WHERE oc.org_id = s.org_id AND oc.county_id = s.county_id) AS served
+       FROM staging_sites s WHERE s.id = $1 AND s.org_id = $2 AND s.status = 'ACTIVE'`,
+    [siteId, orgId],
   );
-  const fail = (field: string, msg: string) => new AppError("VALIDATION", "Please correct the highlighted fields.", { [field]: [msg] });
-  if (!county.length) throw fail("countyId", "Choose a county");
-  if (!county[0].served) throw fail("countyId", "Your organization's profile does not list this county as served");
-  const known = await tx.query(`SELECT 1 FROM zip_county WHERE zip = $1 LIMIT 1`, [zip]);
-  if (!known.length) throw fail("zip", "Unknown ZIP code");
-  if (county[0].fips) {
-    const inside = await tx.query(`SELECT 1 FROM zip_county WHERE zip = $1 AND county_fips = $2`, [zip, county[0].fips]);
-    if (!inside.length) throw fail("zip", "That ZIP code is not in the chosen county");
-  }
+  const fail = (msg: string) => new AppError("VALIDATION", "Please correct the highlighted fields.", { siteId: [msg] });
+  if (!rows.length) throw fail("Choose one of your organization's locations");
+  if (!rows[0].county_id || !rows[0].zip) throw fail(NOT_COVERED);
+  if (!rows[0].served) throw fail(NOT_SERVED);
+  return { countyId: rows[0].county_id, zip: rows[0].zip };
+}
+
+export type ProjectSiteOption = {
+  id: string; name: string; city: string | null; zip: string | null; countyName: string | null; usable: boolean; reason: string | null;
+};
+
+/** Org members: the organization's active sites a project can start at, each marked usable or not with the reason. */
+export async function listProjectSites(driver: Driver, userId: string, orgId: string): Promise<ProjectSiteOption[]> {
+  const org = uuid(orgId);
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    if (!(await membershipRole(tx, org, userId))) throw new AppError("FORBIDDEN", "You are not a member of this organization.");
+    const rows = await tx.query<{ id: string; name: string; city: string | null; zip: string | null; county_name: string | null; served: boolean }>(
+      `SELECT s.id, s.name, s.city, left(s.postal_code, 5) AS zip, c.name AS county_name,
+              EXISTS (SELECT 1 FROM organization_counties oc WHERE oc.org_id = s.org_id AND oc.county_id = s.county_id) AS served
+         FROM staging_sites s LEFT JOIN counties c ON c.id = s.county_id
+        WHERE s.org_id = $1 AND s.status = 'ACTIVE'
+        ORDER BY s.name, s.id`,
+      [org],
+    );
+    return rows.map((r) => {
+      const reason = !r.county_name || !r.zip ? NOT_COVERED : !r.served ? NOT_SERVED : null;
+      return { id: r.id, name: r.name, city: r.city, zip: r.zip, countyName: r.county_name, usable: reason === null, reason };
+    });
+  });
 }
 
 type LockedProject = { id: string; org_id: string; status: ProjectStatus };
@@ -115,11 +144,11 @@ export async function createProject(driver: Driver, userId: string, orgId: strin
   try {
     return await runIn(driver, { kind: "system" }, async (tx) => {
       await assertOrgEditor(tx, userId, org);
-      await assertProjectArea(tx, org, input.countyId, input.zip);
+      const area = await resolveProjectSite(tx, org, input.siteId);
       const rows = await tx.query<{ id: string }>(
-        `INSERT INTO projects (org_id, title, description, county_id, zip, audience, private_location_notes, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [org, input.title, input.description, input.countyId, input.zip, input.audience, input.privateLocationNotes ?? null, userId],
+        `INSERT INTO projects (org_id, title, description, county_id, zip, site_id, audience, private_location_notes, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+        [org, input.title, input.description, area.countyId, area.zip, input.siteId, input.audience, input.privateLocationNotes ?? null, userId],
       );
       await writeAudit(tx, {
         actorUserId: userId, actorOrgId: org, action: "PROJECT_CREATED", subjectType: "project", subjectId: rows[0].id,
@@ -139,12 +168,12 @@ export async function updateProject(driver: Driver, userId: string, id: string, 
   try {
     await runIn(driver, { kind: "system" }, async (tx) => {
       const p = await lockEditableProject(tx, userId, projectId);
-      await assertProjectArea(tx, p.org_id, input.countyId, input.zip);
+      const area = await resolveProjectSite(tx, p.org_id, input.siteId);
       await tx.query(
-        `UPDATE projects SET title = $2, description = $3, county_id = $4, zip = $5, audience = $6, private_location_notes = $7,
-                ${REVIEW_RESET}
+        `UPDATE projects SET title = $2, description = $3, county_id = $4, zip = $5, site_id = $6, audience = $7,
+                private_location_notes = $8, ${REVIEW_RESET}
           WHERE id = $1`,
-        [projectId, input.title, input.description, input.countyId, input.zip, input.audience, input.privateLocationNotes ?? null],
+        [projectId, input.title, input.description, area.countyId, area.zip, input.siteId, input.audience, input.privateLocationNotes ?? null],
       );
       await writeAudit(tx, {
         actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_UPDATED", subjectType: "project", subjectId: projectId,
@@ -158,8 +187,8 @@ export async function updateProject(driver: Driver, userId: string, id: string, 
 
 type DbProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_id: string; county_name: string;
-  state: string; zip: string; audience: string; status: ProjectStatus; private_location_notes: string | null; review_note: string | null;
-  org_ok: boolean;
+  state: string; zip: string; site_id: string | null; audience: string; status: ProjectStatus; private_location_notes: string | null;
+  review_note: string | null; org_ok: boolean;
 };
 type DbNeed = {
   id: string; title: string; details: string | null; urgency: "NORMAL" | "URGENT"; slots_needed: number;
@@ -168,7 +197,7 @@ type DbNeed = {
 
 export const PROJECT_SELECT = `
   SELECT p.id, p.org_id, o.display_name AS org_name, p.title, p.description, p.county_id, c.name AS county_name, c.state,
-         p.zip, p.audience, p.status, p.private_location_notes, p.review_note,
+         p.zip, p.site_id, p.audience, p.status, p.private_location_notes, p.review_note,
          (o.status = 'APPROVED' AND NOT o.publication_suspended) AS org_ok
     FROM projects p JOIN organizations o ON o.id = p.org_id JOIN counties c ON c.id = p.county_id`;
 
@@ -181,7 +210,7 @@ const toNeed = (n: DbNeed): NeedRow => ({
 
 const toProject = (p: DbProject, needs: NeedRow[], role: string | null = null): ProjectRow => ({
   id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyId: p.county_id,
-  countyName: p.county_name, state: p.state, zip: p.zip, audience: p.audience, status: p.status,
+  countyName: p.county_name, state: p.state, zip: p.zip, siteId: p.site_id, audience: p.audience, status: p.status,
   privateLocationNotes: p.private_location_notes, reviewNote: p.review_note,
   canEdit: p.org_ok && (role === "ORG_ADMIN" || role === "EDITOR"), needs,
 });
@@ -382,6 +411,8 @@ export async function submitProject(driver: Driver, userId: string, id: string):
       if (p.status !== "DRAFT") throw new AppError("VALIDATION", `A project that is ${p.status} cannot be submitted.`);
       const n = await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM project_needs WHERE project_id = $1`, [projectId]);
       if (n[0].n < 1) throw new AppError("VALIDATION", "Add at least one need before submitting for review.");
+      const pinned = await tx.query<{ site_id: string | null }>(`SELECT site_id FROM projects WHERE id = $1`, [projectId]);
+      if (!pinned[0].site_id) throw new AppError("VALIDATION", "Choose a location for this project");
       await tx.query(`UPDATE projects SET status = 'PENDING_REVIEW', review_note = NULL WHERE id = $1`, [projectId]);
       await writeAudit(tx, {
         actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_SUBMITTED", subjectType: "project", subjectId: projectId,
@@ -510,6 +541,9 @@ export type PublicProject = {
   hasUrgent: boolean;
   needs: PublicNeed[];
   distanceMiles: number | null;
+  /** The site the project is placed at, and whether that site is on the public map. */
+  siteId: string | null;
+  sitePublic: boolean;
 };
 
 export const projectSearchSchema = z.object({
@@ -538,6 +572,7 @@ const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 export type DbPublicProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
   audience: string; total_slots: number; has_urgent: boolean; dist_m?: number | null;
+  site_id?: string | null; site_public?: boolean;
 };
 type DbPublicNeed = {
   id: string; project_id: string; title: string; details: string | null; urgency: "NORMAL" | "URGENT"; slots_needed: number;
@@ -572,6 +607,7 @@ export const toPublicProject = (p: DbPublicProject, needs: PublicNeed[]): Public
   id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyName: p.county_name,
   state: p.state, zip: p.zip, audience: p.audience, totalSlots: p.total_slots, spotsLeft: needs.reduce((sum, n) => sum + n.spotsLeft, 0), hasUrgent: p.has_urgent, needs,
   distanceMiles: p.dist_m === null || p.dist_m === undefined ? null : Math.round((Number(p.dist_m) / METERS_PER_MILE) * 10) / 10,
+  siteId: p.site_id ?? null, sitePublic: Boolean(p.site_public),
 });
 
 /**
@@ -594,7 +630,8 @@ export async function searchProjects(
                                ELSE ST_Distance(ics.zip_point(p.zip), origin.pt) END AS dist_m
                 FROM public_projects p CROSS JOIN origin)
        SELECT s.id, s.org_id, s.org_name, s.title, s.description, s.county_name, s.state, s.zip, s.audience,
-              s.total_slots, s.has_urgent, s.dist_m
+              s.total_slots, s.has_urgent, s.dist_m, s.site_id,
+              EXISTS (SELECT 1 FROM public_sites ps WHERE ps.id = s.site_id) AS site_public
          FROM scored s
         WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[]) t
                            WHERE NOT (s.title ILIKE t OR s.description ILIKE t
@@ -616,8 +653,9 @@ export async function getPublicProject(driver: Driver, id: string): Promise<Publ
   if (!z.string().uuid().safeParse(id).success) return null;
   return runIn(driver, { kind: "anon" }, async (tx) => {
     const rows = await tx.query<DbPublicProject>(
-      `SELECT id, org_id, org_name, title, description, county_name, state, zip, audience, total_slots, has_urgent
-         FROM public_projects WHERE id = $1`,
+      `SELECT p.id, p.org_id, p.org_name, p.title, p.description, p.county_name, p.state, p.zip, p.audience, p.total_slots,
+              p.has_urgent, p.site_id, EXISTS (SELECT 1 FROM public_sites ps WHERE ps.id = p.site_id) AS site_public
+         FROM public_projects p WHERE p.id = $1`,
       [id],
     );
     if (!rows.length) return null;

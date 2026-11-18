@@ -26,6 +26,24 @@ GRANT EXECUTE ON FUNCTION ics.county_for_zip(text) TO ics_app;
 
 UPDATE staging_sites SET county_id = ics.county_for_zip(postal_code) WHERE postal_code IS NOT NULL;
 
+-- Adding a county, giving it a FIPS code, or (de)activating it re-derives the sites whose ZIPs touch it, so sites created
+-- before their county was on the platform pick it up (and lose it again if it is deactivated).
+CREATE FUNCTION ics.county_changes_sites() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, ics AS $$
+DECLARE fips_list text[];
+BEGIN
+  fips_list := array_remove(ARRAY[NEW.fips, CASE WHEN TG_OP = 'UPDATE' THEN OLD.fips END], NULL);
+  IF cardinality(fips_list) > 0 THEN
+    UPDATE staging_sites s SET county_id = ics.county_for_zip(s.postal_code)
+     WHERE s.postal_code IS NOT NULL
+       AND left(s.postal_code, 5) IN (SELECT z.zip FROM zip_county z WHERE z.county_fips = ANY (fips_list))
+       AND s.county_id IS DISTINCT FROM ics.county_for_zip(s.postal_code);
+  END IF;
+  RETURN NULL;
+END $$;
+CREATE TRIGGER counties_rederive_sites AFTER INSERT OR UPDATE OF fips, active ON counties
+  FOR EACH ROW EXECUTE FUNCTION ics.county_changes_sites();
+
 -- 0004's definition with county_id appended (a view can only gain columns at the end).
 CREATE OR REPLACE VIEW public_sites AS
 SELECT s.id, s.org_id, o.display_name AS org_name, o.org_type,

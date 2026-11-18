@@ -3,19 +3,21 @@
 import { useActionState } from "react";
 import type { FormState } from "@/app/auth/actions";
 import { PROJECT_AUDIENCES, PROJECT_AUDIENCE_LABELS, isoToEasternLocal } from "@/lib/projects";
-import type { County } from "@/server/modules/counties";
-import type { NeedRow, ProjectRow } from "@/server/modules/projects";
+import type { NeedRow, ProjectRow, ProjectSiteOption } from "@/server/modules/projects";
 import { Field, FieldError, FormMessage, SubmitButton } from "./forms";
 
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
 
 export function ProjectForm({
   action,
-  counties,
+  sites,
+  newSiteHref,
   project,
 }: {
   action: Action;
-  counties: Pick<County, "id" | "name" | "state">[];
+  /** The organization's locations; the project's county and ZIP come from the one chosen. */
+  sites: ProjectSiteOption[];
+  newSiteHref: string;
   project?: ProjectRow;
 }) {
   const [state, formAction] = useActionState(action, {});
@@ -31,17 +33,23 @@ export function ProjectForm({
         <textarea className="input min-h-28" name="description" required minLength={10} maxLength={4000} defaultValue={project?.description} />
         <FieldError state={state} name="description" />
       </label>
-      <label className="field">
-        <span>County</span>
-        <select className="input" name="countyId" required defaultValue={project?.countyId ?? ""}>
-          <option value="" disabled>Choose a county…</option>
-          {counties.map((c) => <option key={c.id} value={c.id}>{c.name}, {c.state}</option>)}
+      <label className="field sm:col-span-2">
+        <span>Location</span>
+        <select className="input" name="siteId" required defaultValue={project?.siteId ?? ""}>
+          <option value="" disabled>Choose one of your locations…</option>
+          {sites.map((s) => (
+            <option key={s.id} value={s.id} disabled={!s.usable}>
+              {s.name}{s.city ? ` · ${s.city}` : ""}{s.zip ? ` ${s.zip}` : ""}{s.countyName ? ` (${s.countyName} County)` : ""}
+              {s.reason ? ` — ${s.reason}` : ""}
+            </option>
+          ))}
         </select>
-        <small className="text-muted">Only counties your organization profile lists as served.</small>
-        <FieldError state={state} name="countyId" />
+        <small className="text-muted">
+          The project shows on the map at this location, and its county and ZIP decide which disaster events it is
+          suggested for. <a className="underline" href={newSiteHref}>Add a new location</a>
+        </small>
+        <FieldError state={state} name="siteId" />
       </label>
-      <Field label="ZIP code" name="zip" state={state} required inputMode="numeric" maxLength={5} defaultValue={project?.zip} placeholder="28801"
-        hint="The public sees only the ZIP and county, never the exact address." />
       <label className="field sm:col-span-2">
         <span>Who is this for?</span>
         <select className="input" name="audience" required defaultValue={project?.audience ?? ""}>

@@ -1,5 +1,6 @@
 import type { Driver } from "@/server/db";
 import { runIn } from "@/server/db/context";
+import { createProject, updateProject } from "@/server/modules/projects";
 
 /** Test fixtures. All names are prefixed [TEST] — synthetic data only. */
 
@@ -70,4 +71,45 @@ export const ASHEVILLE_BBOX = { w: -83, s: 35, e: -82, n: 36 };
 /** Square polygon around a point, as WKT MULTIPOLYGON. */
 export function squareAround(lng: number, lat: number, d = 0.2): string {
   return `MULTIPOLYGON(((${lng - d} ${lat - d},${lng + d} ${lat - d},${lng + d} ${lat + d},${lng - d} ${lat + d},${lng - d} ${lat - d})))`;
+}
+
+/**
+ * A public site at a ZIP, for a project to start at (migration 0019: a project's county and ZIP come from its site).
+ * Inserted directly so permission tests on projects are not short-circuited by site permissions.
+ */
+export async function siteAt(db: Driver, createdBy: string, orgId: string, zip: string): Promise<string> {
+  const rows = await runIn(db, { kind: "system" }, (tx) =>
+    tx.query<{ id: string }>(
+      `INSERT INTO staging_sites (org_id, name, visibility, location, city, state, postal_code, county_id,
+                                  last_confirmed_at, is_synthetic, created_by, updated_by)
+       VALUES ($1, $2, 'PUBLIC', ST_SetSRID(ST_MakePoint(-82.5515, 35.5951), 4326)::geography, 'Asheville', 'NC', $3,
+               ics.county_for_zip($3), now(), true, $4, $4)
+       RETURNING id`,
+      [orgId, `[TEST] Project site ${zip}`, zip, createdBy],
+    ),
+  );
+  return rows[0].id;
+}
+
+/** Turns an old-style project input ({ countyId, zip, ... }) into one placed at a site at that ZIP. */
+export async function withSite(db: Driver, createdBy: string, orgId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const rest = { ...input };
+  const zip = rest.zip;
+  delete rest.countyId;
+  delete rest.zip;
+  if (rest.siteId) return rest;
+  return { ...rest, siteId: await siteAt(db, createdBy, orgId, String(zip)) };
+}
+
+/** createProject for tests written before projects had sites: places the project at a site for its { countyId, zip }. */
+export async function createProjectAtZip(db: Driver, userId: string, orgId: string, input: Record<string, unknown>): Promise<string> {
+  return createProject(db, userId, orgId, await withSite(db, userId, orgId, input));
+}
+
+/** updateProject counterpart of createProjectAtZip (the new site belongs to the project's own organization). */
+export async function updateProjectAtZip(db: Driver, userId: string, projectId: string, input: Record<string, unknown>): Promise<void> {
+  const org = await runIn(db, { kind: "system" }, (tx) =>
+    tx.query<{ org_id: string }>(`SELECT org_id FROM projects WHERE id::text = $1`, [projectId]));
+  const placed = org.length ? await withSite(db, userId, org[0].org_id, input) : { ...input, siteId: "00000000-0000-0000-0000-000000000000" };
+  return updateProject(db, userId, projectId, placed);
 }

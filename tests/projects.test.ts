@@ -2,10 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Driver, Tx } from "@/server/db";
 import { runIn } from "@/server/db/context";
 import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
-import {
-  addNeed, createProject, getProjectForEditor, listOrgProjects, listProjectsForReview, removeNeed, reviewProject, setProjectStatus,
-  getPublicProject, searchProjects, submitProject, updateNeed, updateProject,
-} from "@/server/modules/projects";
+import { addNeed, getProjectForEditor, listOrgProjects, listProjectsForReview, removeNeed, reviewProject, setProjectStatus, getPublicProject, searchProjects, submitProject, updateNeed } from "@/server/modules/projects";
+import { createProjectAtZip as createProject, updateProjectAtZip as updateProject } from "./helpers/fixtures";
 import { eastern, easternLocalToIso, isoToEasternLocal } from "@/lib/projects";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";

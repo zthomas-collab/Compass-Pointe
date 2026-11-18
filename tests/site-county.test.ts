@@ -49,6 +49,14 @@ describe("site county from ZIP", () => {
     expect(await countyOf(id)).toBeNull();
   });
 
+  it("fills in a site's county once that county is added to the platform", async () => {
+    // 28714 is Yancey County, which is not on the platform yet.
+    const id = await createSite(db, editor, org, site({ name: "[TEST] Burnsville", postalCode: "28714", county: "Yancey" }));
+    expect(await countyOf(id)).toBeNull();
+    const yancey = await createCounty(db, exec, { name: "Yancey", state: "NC", fips: "37199" });
+    expect(await countyOf(id)).toBe(yancey);
+  });
+
   it("re-derives on update", async () => {
     const id = await createSite(db, editor, org, site({ name: "[TEST] Mover", postalCode: "28778" }));
     const hendersonZip = (await runIn(db, { kind: "system" }, (tx) => tx.query<{ zip: string }>(
