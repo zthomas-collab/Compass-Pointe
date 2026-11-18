@@ -7,6 +7,7 @@ import { canManageCounty, loadAccess } from "./access";
 import { DEFAULT_RADIUS_MILES, RADIUS_OPTIONS_MILES, membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
+import { suggestForProject } from "./suggestions";
 import { TAKEN_SQL, noticeProjectCancelled } from "./volunteers";
 
 export type NeedRow = {
@@ -460,6 +461,12 @@ export async function reviewProject(driver: Driver, actorId: string, id: string,
         `UPDATE projects SET status = $2, review_note = $3, reviewed_by = $4, reviewed_at = now() WHERE id = $1`,
         [projectId, input.decision === "APPROVE" ? "OPEN" : "DRAFT", input.decision === "RETURN" ? input.note : null, actorId],
       );
+      if (input.decision === "APPROVE") {
+        const suggested = await suggestForProject(tx, projectId);
+        if (suggested > 0) {
+          await writeAudit(tx, { actorUserId: actorId, action: "EVENT_LINKS_SUGGESTED", subjectType: "project", subjectId: projectId, details: { count: suggested } });
+        }
+      }
       await writeAudit(tx, {
         actorUserId: actorId, actorOrgId: p.org_id, action: input.decision === "APPROVE" ? "PROJECT_APPROVED" : "PROJECT_RETURNED",
         subjectType: "project", subjectId: projectId, details: { note: input.note },

@@ -5,6 +5,7 @@ import { AppError, fromDbError } from "../errors";
 import { assertExecutive } from "./access";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
+import { suggestForEvent } from "./suggestions";
 
 import { HAZARD_TYPES } from "@/lib/events";
 import type { OfferType } from "@/lib/offers";
@@ -200,6 +201,11 @@ export async function updateEvent(driver: Driver, actorId: string, id: string, r
       }
       for (const zip of input.zips) await tx.query(`INSERT INTO event_zips (event_id, zip) VALUES ($1, $2)`, [eventId, zip]);
       await writeAudit(tx, { actorUserId: actorId, action: "EVENT_UPDATED", subjectType: "event", subjectId: eventId, details: { slug } });
+      // The area may have grown: suggest the open projects now inside it (an active or recovering event only).
+      const suggested = await suggestForEvent(tx, eventId);
+      if (suggested > 0) {
+        await writeAudit(tx, { actorUserId: actorId, action: "EVENT_LINKS_SUGGESTED", subjectType: "event", subjectId: eventId, details: { count: suggested } });
+      }
     });
   } catch (err) {
     throw fromDbError(err);
@@ -226,6 +232,10 @@ export async function setEventStatus(driver: Driver, actorId: string, id: string
         actorUserId: actorId, action: "EVENT_STATUS_CHANGED", subjectType: "event", subjectId: eventId,
         details: { from: current.status, to: target },
       });
+      const suggested = target === "ACTIVE" || target === "RECOVERY" ? await suggestForEvent(tx, eventId) : 0;
+      if (suggested > 0) {
+        await writeAudit(tx, { actorUserId: actorId, action: "EVENT_LINKS_SUGGESTED", subjectType: "event", subjectId: eventId, details: { count: suggested } });
+      }
     });
   } catch (err) {
     throw fromDbError(err);

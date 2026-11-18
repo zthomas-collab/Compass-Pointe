@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
+import { dismissSuggestion, linkProjectToEvent } from "@/server/modules/eventlinks";
 import { createEvent, setEventStatus, updateEvent, type EventStatus } from "@/server/modules/events";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
@@ -57,4 +58,29 @@ export async function setEventStatusAction(id: string, to: EventStatus): Promise
   refresh();
   revalidatePath(`/admin/events/${id}`);
   return { ok: true, message: "Status updated." };
+}
+
+/** Bound as (eventId, projectId): an administrator accepts a suggested project for this event. */
+export async function confirmEventSuggestionAction(eventId: string, projectId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await linkProjectToEvent(await getDriver(), user.id, projectId, eventId);
+  } catch (err) {
+    return toState(err);
+  }
+  revalidatePath(`/admin/events/${eventId}`);
+  revalidatePath("/events", "layout");
+  return { ok: true, message: "Added to the event." };
+}
+
+/** Bound as (eventId, projectId): an administrator declines a suggested project for this event. */
+export async function dismissEventSuggestionAction(eventId: string, projectId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await dismissSuggestion(await getDriver(), user.id, projectId, eventId);
+  } catch (err) {
+    return toState(err);
+  }
+  revalidatePath(`/admin/events/${eventId}`);
+  return { ok: true, message: "Suggestion dismissed." };
 }

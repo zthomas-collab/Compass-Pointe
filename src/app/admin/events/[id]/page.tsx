@@ -3,11 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EventForm, StatusButton } from "@/components/event-forms";
 import { EventStatusBadge } from "@/components/event-status";
+import { ActionButton } from "@/components/project-forms";
 import { getDriver } from "@/server/db";
 import { listCounties } from "@/server/modules/counties";
+import { listSuggestions } from "@/server/modules/eventlinks";
 import { ALLOWED_TRANSITIONS, getEventAdmin, type EventRow } from "@/server/modules/events";
 import { requireUser } from "@/server/session";
-import { setEventStatusAction, updateEventAction } from "../actions";
+import { confirmEventSuggestionAction, dismissEventSuggestionAction, setEventStatusAction, updateEventAction } from "../actions";
 import { gateAdminError } from "../gate";
 
 export const metadata: Metadata = { title: "Edit event", robots: { index: false } };
@@ -31,7 +33,7 @@ export default async function AdminEventPage({
     return gateAdminError(err);
   }
   if (!event) notFound();
-  const counties = await listCounties(db);
+  const [counties, suggestions] = await Promise.all([listCounties(db), listSuggestions(db, user.id, { eventId: event.id })]);
   const next = ALLOWED_TRANSITIONS[event.status].filter((s) => s !== "DRAFT");
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6">
@@ -59,6 +61,27 @@ export default async function AdminEventPage({
           </div>
         )}
       </section>
+
+      {suggestions.length > 0 && (
+        <section className="card mt-5 border-brand p-4" aria-labelledby="suggested-projects-h">
+          <h2 id="suggested-projects-h" className="text-lg font-semibold">Suggested projects</h2>
+          <p className="text-sm text-muted">Open projects inside this event&apos;s area. Add them to show them on the event page.</p>
+          <ul className="mt-2 divide-y divide-line">
+            {suggestions.map((sg) => (
+              <li key={sg.projectId} className="grid gap-2 py-2 sm:grid-cols-[1fr_auto] sm:items-center">
+                <span>
+                  <Link className="font-medium text-brand underline" href={`/dashboard/projects/${sg.projectId}`}>{sg.projectTitle}</Link>
+                  <span className="block text-sm text-muted">{sg.orgName}</span>
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton action={confirmEventSuggestionAction.bind(null, event.id, sg.projectId)} label="Add to event" className="btn btn-primary" />
+                  <ActionButton action={dismissEventSuggestionAction.bind(null, event.id, sg.projectId)} label="Not this one" />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="card mt-5 p-4" aria-labelledby="edit-h">
         <h2 id="edit-h" className="mb-2 text-lg font-semibold">Details</h2>

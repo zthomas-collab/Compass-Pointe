@@ -257,3 +257,74 @@ export async function listPublicProjectEvents(
     ),
   );
 }
+
+export type EventSuggestion = {
+  projectId: string; projectTitle: string; orgName: string; eventId: string; eventName: string; eventSlug: string;
+};
+
+/**
+ * Suggested (project, event) pairs this user may decide on, for one project or one event. Only pairs that could still
+ * be confirmed right now are listed: the event is ACTIVE or RECOVERY, the project is not finished, and it is still
+ * inside the event's area. Never public.
+ */
+export async function listSuggestions(
+  driver: Driver, userId: string, scope: { projectId: string } | { eventId: string },
+): Promise<EventSuggestion[]> {
+  const byProject = "projectId" in scope;
+  const id = byProject ? scope.projectId : scope.eventId;
+  if (!z.string().uuid().safeParse(id).success) return [];
+  return runIn(driver, { kind: "system" }, async (tx) => {
+    const rows = await tx.query<{
+      project_id: string; title: string; org_id: string; org_name: string; county_id: string; org_ok: boolean;
+      event_id: string; event_name: string; event_slug: string;
+    }>(
+      `SELECT p.id AS project_id, p.title, p.org_id, o.display_name AS org_name, p.county_id,
+              (o.status = 'APPROVED' AND NOT o.publication_suspended) AS org_ok,
+              e.id AS event_id, e.name AS event_name, e.slug AS event_slug
+         FROM project_event_links l
+         JOIN projects p ON p.id = l.project_id
+         JOIN organizations o ON o.id = p.org_id
+         JOIN events e ON e.id = l.event_id
+        WHERE l.state = 'SUGGESTED' AND ${byProject ? "l.project_id" : "l.event_id"} = $1
+          AND e.status IN ('ACTIVE','RECOVERY') AND p.status NOT IN ('COMPLETED','CANCELLED')
+        ORDER BY e.starts_on DESC, e.name, p.title, p.id
+        LIMIT 200`,
+      [id],
+    );
+    const out: EventSuggestion[] = [];
+    for (const r of rows) {
+      if (!(await decisionRole(tx, userId, r))) continue;
+      if (!(await projectInEventArea(tx, r.project_id, r.event_id))) continue;
+      out.push({
+        projectId: r.project_id, projectTitle: r.title, orgName: r.org_name, eventId: r.event_id, eventName: r.event_name, eventSlug: r.event_slug,
+      });
+    }
+    return out;
+  });
+}
+
+/** Decline a suggestion (it becomes DISMISSED, recording who decided and in what capacity). NOT_FOUND when it is not one. */
+export async function dismissSuggestion(driver: Driver, userId: string, projectId: string, eventId: string): Promise<void> {
+  const pid = uuid(projectId);
+  const eid = uuid(eventId);
+  try {
+    await runIn(driver, { kind: "system" }, async (tx) => {
+      const p = await lockProject(tx, pid);
+      const role = await decisionRole(tx, userId, p);
+      if (!role) throw new AppError("FORBIDDEN", "You cannot change this project's events.");
+      const existing = await tx.query<{ state: string }>(
+        `SELECT state FROM project_event_links WHERE project_id = $1 AND event_id = $2 FOR UPDATE`, [pid, eid]);
+      if (existing[0]?.state !== "SUGGESTED") throw new AppError("NOT_FOUND", "There is no suggestion for this project and event.");
+      await tx.query(
+        `UPDATE project_event_links SET state = 'DISMISSED', decided_by = $3, decided_by_role = $4, decided_at = now()
+          WHERE project_id = $1 AND event_id = $2`,
+        [pid, eid, userId, role],
+      );
+      await writeAudit(tx, {
+        actorUserId: userId, action: "EVENT_SUGGESTION_DISMISSED", subjectType: "project", subjectId: pid, details: { eventId: eid, role },
+      });
+    });
+  } catch (err) {
+    throw fromDbError(err);
+  }
+}
