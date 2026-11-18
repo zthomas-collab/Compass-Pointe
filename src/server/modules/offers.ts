@@ -39,6 +39,10 @@ const OFFER_MOVES: [OfferStatus, OfferStatus][] = [
   ["SCHEDULED", "COMPLETED"], ["SCHEDULED", "CANCELED"],
 ];
 export const nextOfferStatuses = (from: OfferStatus): OfferStatus[] => OFFER_MOVES.filter(([f]) => f === from).map(([, t]) => t);
+/** On an offer sent to an organization, staff may only return it to central triage or cancel it; the organization does the rest. */
+export const STAFF_DIRECTED_TARGETS: OfferStatus[] = ["REVIEWED", "CANCELED"];
+export const nextStaffOfferStatuses = (from: OfferStatus, directed: boolean): OfferStatus[] =>
+  nextOfferStatuses(from).filter((t) => !directed || STAFF_DIRECTED_TARGETS.includes(t));
 
 const EMAIL_SETTING = "offers_notification_email";
 const PER_EMAIL_DAILY_LIMIT = 3;
@@ -74,6 +78,8 @@ export const offerSchema = z.object({
   preferredProject: optionalText(140),
   consentContact: checkbox.refine((v) => v === true, "We need your permission to contact you about this offer"),
   consentShare: checkbox,
+  /** Set when the giver chose an organization; absent means the central inbox. */
+  organizationId: uuid.optional().or(z.literal("").transform(() => undefined)),
 });
 
 export async function getNotificationEmail(tx: Tx): Promise<string | null> {
@@ -81,11 +87,23 @@ export async function getNotificationEmail(tx: Tx): Promise<string | null> {
   return r[0]?.v && r[0].v !== "null" ? r[0].v : null;
 }
 
-/** Records the offer, then queues (never sends inline) a notification to the configured address and a receipt to the contributor. */
-export async function submitOffer(driver: Driver, raw: unknown): Promise<{ reference: string; id: string }> {
+const NOT_TAKING = "This organization isn't taking that kind of donation right now.";
+
+/**
+ * Records the offer, then queues (never sends inline) a notification and a receipt to the contributor.
+ * Without `organizationId` the notification goes to the configured central address (status SUBMITTED). With it, the
+ * offer goes to that organization (status MATCHED, the organization's private contact email is notified), which needs
+ * the giver's consent to share their details and an eligible organization that accepts this kind of giving.
+ */
+export async function submitOffer(driver: Driver, raw: unknown): Promise<{ reference: string; id: string; organizationName: string | null }> {
   const input = parseOrThrow(offerSchema, raw);
   if (input.availableFrom && input.availableUntil && input.availableUntil < input.availableFrom) {
     throw new AppError("VALIDATION", "The end date is before the start date.", { availableUntil: ["Must be on or after the start date"] });
+  }
+  if (input.organizationId && !input.consentShare) {
+    throw new AppError("VALIDATION", "We need your permission to share your details with the organization.", {
+      consentShare: ["Required to send your offer to this organization"],
+    });
   }
   try {
     return await runIn(driver, { kind: "system" }, async (tx) => {
@@ -110,34 +128,64 @@ export async function submitOffer(driver: Driver, raw: unknown): Promise<{ refer
           countyId = c[0]?.id ?? null;
         }
       }
+      // A directed offer is re-checked here, inside the transaction: eligible organization, accepting this type.
+      let recipient: { id: string; name: string; contactEmail: string } | null = null;
+      if (input.organizationId) {
+        const o = await tx.query<{ id: string; display_name: string; contact_email: string }>(
+          `SELECT o.id, o.display_name, o.contact_email FROM organizations o
+            WHERE o.id = $1 AND ics.org_is_eligible(o.id)
+              AND EXISTS (SELECT 1 FROM organization_accepted_offer_types a WHERE a.org_id = o.id AND a.offer_type = $2)`,
+          [input.organizationId, input.contributionType],
+        );
+        if (!o.length) throw new AppError("VALIDATION", NOT_TAKING, { organizationId: [NOT_TAKING] });
+        recipient = { id: o[0].id, name: o[0].display_name, contactEmail: o[0].contact_email };
+      }
       const rows = await tx.query<{ id: string; reference: string }>(
         `INSERT INTO contribution_offers (contributor_name, organization_name, email, phone, county_id, zip, contribution_type, quantity, unit,
-                                          description, available_from, available_until, delivery_notes, preferred_project, consent_contact, consent_share)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id, reference`,
+                                          description, available_from, available_until, delivery_notes, preferred_project, consent_contact, consent_share,
+                                          organization_id, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id, reference`,
         [input.contributorName, input.organizationName, input.email, input.phone, countyId, input.zip, input.contributionType, input.quantity,
-         input.unit, input.description, input.availableFrom, input.availableUntil, input.deliveryNotes, input.preferredProject, true, input.consentShare],
+         input.unit, input.description, input.availableFrom, input.availableUntil, input.deliveryNotes, input.preferredProject, true, input.consentShare,
+         recipient?.id ?? null, recipient ? "MATCHED" : "SUBMITTED"],
       );
       const { id, reference } = rows[0];
       await tx.query(
-        `INSERT INTO contribution_offer_events (offer_id, actor_role, event_type, to_status, note) VALUES ($1, 'CONTRIBUTOR', 'SUBMITTED', 'SUBMITTED', 'Offer submitted.')`, [id]);
-      await writeAudit(tx, { actorUserId: null, action: "OFFER_SUBMITTED", subjectType: "contribution_offer", subjectId: id, details: { type: input.contributionType, hasCounty: Boolean(countyId) } });
+        `INSERT INTO contribution_offer_events (offer_id, actor_role, event_type, to_status, note) VALUES ($1, 'CONTRIBUTOR', 'SUBMITTED', $2, $3)`,
+        [id, recipient ? "MATCHED" : "SUBMITTED", recipient ? "Offer sent to an organization." : "Offer submitted."]);
+      await writeAudit(tx, {
+        actorUserId: null, action: "OFFER_SUBMITTED", subjectType: "contribution_offer", subjectId: id,
+        details: { type: input.contributionType, hasCounty: Boolean(countyId), toOrganization: recipient?.id ?? null },
+      });
 
-      const destination = await getNotificationEmail(tx);
-      if (destination) {
+      const typeLabel = OFFER_TYPE_LABELS[input.contributionType];
+      if (recipient) {
         await enqueueEmail(tx, {
-          kind: "OFFER_NEW",
-          to: destination,
-          subject: `${brandName()}: new ${OFFER_TYPE_LABELS[input.contributionType].toLowerCase()} offer ${reference}`,
-          body: `A new offer was received (${reference}).\nType: ${OFFER_TYPE_LABELS[input.contributionType]}\nZIP: ${input.zip}\n\nReview it (sign-in and MFA required): ${appBaseUrl()}/admin/offers/${id}`,
+          kind: "OFFER_NEW_ORG",
+          to: recipient.contactEmail,
+          subject: `${brandName()}: new ${typeLabel.toLowerCase()} offer ${reference}`,
+          body: `Someone offered ${recipient.name} a donation through ${brandName()} (${reference}).\nType: ${typeLabel}\nZIP: ${input.zip}\n\nSee it and reply (sign-in required): ${appBaseUrl()}/dashboard/orgs/${recipient.id}/offers/${id}`,
         });
+      } else {
+        const destination = await getNotificationEmail(tx);
+        if (destination) {
+          await enqueueEmail(tx, {
+            kind: "OFFER_NEW",
+            to: destination,
+            subject: `${brandName()}: new ${typeLabel.toLowerCase()} offer ${reference}`,
+            body: `A new offer was received (${reference}).\nType: ${typeLabel}\nZIP: ${input.zip}\n\nReview it (sign-in and MFA required): ${appBaseUrl()}/admin/offers/${id}`,
+          });
+        }
       }
       await enqueueEmail(tx, {
         kind: "OFFER_RECEIPT",
         to: input.email,
         subject: `${brandName()}: we received your offer ${reference}`,
-        body: `Thank you. We received your offer.\nReference number: ${reference}\n\nA coordinator will review it and may contact you. Receiving an offer does not commit anyone to accept it. If you did not send this, ignore this message.`,
+        body: recipient
+          ? `Thank you. We sent your offer to ${recipient.name}.\nReference number: ${reference}\n\nThey will contact you to arrange it. Sending an offer does not commit anyone to accept it. If you did not send this, ignore this message.`
+          : `Thank you. We received your offer.\nReference number: ${reference}\n\nA coordinator will review it and may contact you. Receiving an offer does not commit anyone to accept it. If you did not send this, ignore this message.`,
       });
-      return { reference, id };
+      return { reference, id, organizationName: recipient?.name ?? null };
     });
   } catch (err) {
     throw fromDbError(err);
@@ -158,6 +206,8 @@ async function assertStaff(tx: Tx, userId: string): Promise<{ executive: boolean
 export type OfferSummary = {
   id: string; reference: string; contributorName: string; organizationName: string | null; contributionType: OfferType;
   quantity: number | null; unit: string | null; zip: string; countyName: string | null; status: OfferStatus; createdAt: Date; statusChangedAt: Date;
+  /** The organization the giver sent this offer to; null for the central inbox. */
+  recipientOrgId: string | null; recipientOrgName: string | null;
 };
 export type OfferEvent = { id: string; type: string; fromStatus: string | null; toStatus: string | null; note: string | null; actorRole: string; at: Date };
 export type OfferDetail = OfferSummary & {
@@ -167,7 +217,8 @@ export type OfferDetail = OfferSummary & {
 };
 
 const SELECT = `o.id, o.reference, o.contributor_name, o.organization_name, o.contribution_type, o.quantity, o.unit, o.zip, o.status,
-                o.created_at, o.status_changed_at, c.name AS county_name`;
+                o.created_at, o.status_changed_at, c.name AS county_name, o.organization_id AS recipient_org_id,
+                (SELECT r.display_name FROM organizations r WHERE r.id = o.organization_id) AS recipient_org_name`;
 const FROM = `contribution_offers o LEFT JOIN counties c ON c.id = o.county_id`;
 const toSummary = (r: Record<string, unknown>): OfferSummary => ({
   id: r.id as string, reference: r.reference as string, contributorName: r.contributor_name as string,
@@ -175,12 +226,14 @@ const toSummary = (r: Record<string, unknown>): OfferSummary => ({
   quantity: r.quantity === null || r.quantity === undefined ? null : Number(r.quantity), unit: (r.unit as string | null) ?? null,
   zip: r.zip as string, countyName: (r.county_name as string | null) ?? null, status: r.status as OfferStatus,
   createdAt: r.created_at as Date, statusChangedAt: r.status_changed_at as Date,
+  recipientOrgId: (r.recipient_org_id as string | null) ?? null, recipientOrgName: (r.recipient_org_name as string | null) ?? null,
 });
 
 export const offerFilterSchema = z.object({
   status: z.enum(OFFER_STATUSES).optional().or(z.literal("").transform(() => undefined)),
   type: z.enum(OFFER_TYPES).optional().or(z.literal("").transform(() => undefined)),
   countyId: uuid.optional().or(z.literal("").transform(() => undefined)),
+  destination: z.enum(["all", "central", "org"]).optional().or(z.literal("").transform(() => undefined)).transform((v) => v ?? "all"),
   page: z.coerce.number().int().min(1).max(500).default(1),
 });
 export const OFFER_PAGE_SIZE = 25;
@@ -192,8 +245,9 @@ export async function listOffers(driver: Driver, userId: string, raw: unknown = 
     const rows = await tx.query<Record<string, unknown>>(
       `SELECT ${SELECT} FROM ${FROM}
         WHERE ($1::text IS NULL OR o.status = $1) AND ($2::text IS NULL OR o.contribution_type = $2) AND ($3::uuid IS NULL OR o.county_id = $3)
+          AND ($6 = 'all' OR ($6 = 'central') = (o.organization_id IS NULL))
         ORDER BY (o.status IN ('SUBMITTED','REVIEWED')) DESC, o.created_at DESC, o.id LIMIT $4 OFFSET $5`,
-      [f.status ?? null, f.type ?? null, f.countyId ?? null, OFFER_PAGE_SIZE + 1, (f.page - 1) * OFFER_PAGE_SIZE],
+      [f.status ?? null, f.type ?? null, f.countyId ?? null, OFFER_PAGE_SIZE + 1, (f.page - 1) * OFFER_PAGE_SIZE, f.destination],
     );
     const c = await tx.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM contribution_offers GROUP BY status`);
     const u = await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM contribution_offers WHERE county_id IS NULL AND status = 'SUBMITTED'`);
@@ -227,7 +281,7 @@ export async function getOffer(driver: Driver, userId: string, id: string): Prom
     consentShare: d.r.consent_share as boolean, countyId: (d.r.county_id as string | null) ?? null,
     events: d.ev.map((e) => ({ id: e.id as string, type: e.event_type as string, fromStatus: e.from_status as string | null,
       toStatus: e.to_status as string | null, note: e.note as string | null, actorRole: e.actor_role as string, at: e.created_at as Date })),
-    allowedNext: nextOfferStatuses(s.status),
+    allowedNext: nextStaffOfferStatuses(s.status, s.recipientOrgId !== null),
     canAssignCounty: staff.executive && d.r.county_id === null,
   };
 }
@@ -238,10 +292,18 @@ export const offerTransitionSchema = z.object({
   note: z.string().trim().max(2000).optional().transform((v) => (v ? v : null)),
 });
 
-async function actorFor(tx: Tx, userId: string, countyId: string | null): Promise<"EXECUTIVE" | "COUNTY_ADMIN"> {
+/**
+ * The capacity a staff member acts in on one offer: executive, or county administrator of the giver's county or (for an
+ * offer sent to an organization) of any county that organization serves. Anyone else gets NOT_FOUND.
+ */
+async function actorFor(tx: Tx, userId: string, offer: { county_id: string | null; organization_id: string | null }): Promise<"EXECUTIVE" | "COUNTY_ADMIN"> {
   const a = await loadAccess(tx, userId);
   if (a.executive) return "EXECUTIVE";
-  if (countyId && a.countyIds.includes(countyId)) return "COUNTY_ADMIN";
+  if (offer.county_id && a.countyIds.includes(offer.county_id)) return "COUNTY_ADMIN";
+  if (offer.organization_id && a.countyIds.length) {
+    const s = await tx.query(`SELECT 1 FROM organization_counties WHERE org_id = $1 AND county_id = ANY($2::uuid[])`, [offer.organization_id, a.countyIds]);
+    if (s.length) return "COUNTY_ADMIN";
+  }
   throw new AppError("NOT_FOUND", "Offer not found."); // do not reveal that it exists
 }
 
@@ -257,13 +319,30 @@ export async function transitionOffer(driver: Driver, userId: string, raw: unkno
   try {
     await runIn(driver, { kind: "system" }, async (tx) => {
       await assertStaff(tx, userId);
-      const o = await tx.query<{ status: OfferStatus; county_id: string | null }>(`SELECT status, county_id FROM contribution_offers WHERE id = $1 FOR UPDATE`, [input.offerId]);
+      const o = await tx.query<{ status: OfferStatus; county_id: string | null; organization_id: string | null; org_name: string | null }>(
+        `SELECT o.status, o.county_id, o.organization_id, (SELECT display_name FROM organizations WHERE id = o.organization_id) AS org_name
+           FROM contribution_offers o WHERE o.id = $1 FOR UPDATE`, [input.offerId]);
       if (!o.length) throw new AppError("NOT_FOUND", "Offer not found.");
-      const role = await actorFor(tx, userId, o[0].county_id);
+      const role = await actorFor(tx, userId, o[0]);
       if (!OFFER_MOVES.some(([f, t]) => f === o[0].status && t === input.to)) throw new AppError("CONFLICT", "That status change is not allowed from the current state.");
-      await setActor(tx, userId, role, input.note);
-      await tx.query(`UPDATE contribution_offers SET status = $2, assigned_admin_id = coalesce(assigned_admin_id, $3) WHERE id = $1`, [input.offerId, input.to, userId]);
-      await writeAudit(tx, { actorUserId: userId, action: `OFFER_${input.to}`, subjectType: "contribution_offer", subjectId: input.offerId, details: { from: o[0].status } });
+      const directed = o[0].organization_id !== null;
+      if (directed && !STAFF_DIRECTED_TARGETS.includes(input.to)) {
+        throw new AppError("CONFLICT", "The organization accepts or declines this offer.");
+      }
+      // Returning a directed offer to central triage detaches it from the organization (allowed by offers_guard only here).
+      const rescue = directed && input.to === "REVIEWED";
+      const note = rescue
+        ? `Returned from ${o[0].org_name} (${o[0].organization_id}) to central triage.${input.note ? ` ${input.note}` : ""}`
+        : input.note;
+      await setActor(tx, userId, role, note);
+      await tx.query(
+        `UPDATE contribution_offers SET status = $2, assigned_admin_id = coalesce(assigned_admin_id, $3),
+                organization_id = CASE WHEN $4 THEN NULL ELSE organization_id END WHERE id = $1`,
+        [input.offerId, input.to, userId, rescue]);
+      await writeAudit(tx, {
+        actorUserId: userId, action: `OFFER_${input.to}`, subjectType: "contribution_offer", subjectId: input.offerId,
+        details: { from: o[0].status, ...(rescue ? { returnedFromOrganization: o[0].organization_id } : {}) },
+      });
     });
   } catch (err) {
     throw fromDbError(err);
@@ -298,9 +377,10 @@ export async function addOfferNote(driver: Driver, userId: string, offerId: unkn
   try {
     await runIn(driver, { kind: "system" }, async (tx) => {
       await assertStaff(tx, userId);
-      const o = await tx.query<{ county_id: string | null }>(`SELECT county_id FROM contribution_offers WHERE id = $1`, [oid]);
+      const o = await tx.query<{ county_id: string | null; organization_id: string | null }>(
+        `SELECT county_id, organization_id FROM contribution_offers WHERE id = $1`, [oid]);
       if (!o.length) throw new AppError("NOT_FOUND", "Offer not found.");
-      const role = await actorFor(tx, userId, o[0].county_id);
+      const role = await actorFor(tx, userId, o[0]);
       await tx.query(`INSERT INTO contribution_offer_events (offer_id, actor_user_id, actor_role, event_type, note) VALUES ($1, $2, $3, 'NOTE', $4)`, [oid, userId, role, text]);
       await writeAudit(tx, { actorUserId: userId, action: "OFFER_NOTE_ADDED", subjectType: "contribution_offer", subjectId: oid });
     });
