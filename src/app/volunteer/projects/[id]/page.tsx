@@ -5,7 +5,7 @@ import { SignUpForm } from "@/components/signup-forms";
 import { Breadcrumb, VolunteerSectionNav } from "@/components/volunteer-nav";
 import { PROJECT_AUDIENCE_LABELS } from "@/lib/projects";
 import { formatShift } from "@/lib/shift";
-import { VOLUNTEER_PATHS } from "@/lib/volunteer-paths";
+import { VOLUNTEER_PATHS, donatePath } from "@/lib/volunteer-paths";
 import { signUpAction } from "../signup-actions";
 import { getDriver } from "@/server/db";
 import { getPublicOrganization } from "@/server/modules/directory";
@@ -84,6 +84,12 @@ export default async function ProjectPage({ params }: Params) {
             </li>
           ))}
         </ul>
+        {orgProfile && orgProfile.acceptedOfferTypes.length > 0 && (
+          <p className="card mt-6 p-4 text-sm">
+            Can&apos;t make a shift?{" "}
+            <Link className="font-semibold underline" href={donatePath(undefined, project.orgId)}>Offer supplies to {project.orgName}</Link>
+          </p>
+        )}
         <p className="mt-6 text-sm">
           <Link className="underline" href={VOLUNTEER_PATHS.shifts}>← See all shifts</Link>
         </p>

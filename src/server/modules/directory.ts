@@ -10,6 +10,7 @@ import { processImage } from "./images";
 import { writeAudit } from "./shared";
 import type { ObjectStore } from "../storage";
 import { SOCIAL_KINDS, parseSocialLink, parseWebUrl, type SocialKind } from "@/lib/links";
+import { OFFER_TYPES, type OfferType } from "@/lib/offers";
 
 /**
  * Service types (map legend) and the public Black Book of approved organizations.
@@ -197,7 +198,12 @@ export type OrganizationProfile = {
   hasLogo: boolean;
   logoAlt: string | null;
   profileStatus: "PENDING" | "APPROVED" | "HIDDEN";
+  donationUrl: string | null;
+  donationUrlStatus: DonationUrlStatus;
+  donationUrlReviewNote: string | null;
+  acceptedOfferTypes: OfferType[];
 };
+export type DonationUrlStatus = "NONE" | "PENDING" | "APPROVED" | "REJECTED";
 
 export async function membershipRole(tx: Tx, orgId: string, userId: string): Promise<string | null> {
   const r = await tx.query<{ role: string }>(
@@ -220,6 +226,8 @@ export async function getOrganizationProfile(driver: Driver, userId: string, org
         `SELECT o.id, o.display_name, o.status::text AS status, o.description, o.website, o.public_phone, o.public_email, o.public_postal_code,
                 o.primary_service_type, o.requested_service_type, o.directory_consent_at,
                 o.social_links, o.logo_storage_key IS NOT NULL AS has_logo, o.logo_alt, o.profile_status,
+                o.donation_url, o.donation_url_status, o.donation_url_review_note,
+                coalesce((SELECT array_agg(offer_type ORDER BY offer_type) FROM organization_accepted_offer_types WHERE org_id = o.id), '{}') AS accepted,
                 coalesce((SELECT array_agg(service_type) FROM organization_service_types WHERE org_id = o.id), '{}') AS offered,
                 coalesce((SELECT array_agg(county_id) FROM organization_counties WHERE org_id = o.id), '{}') AS county_ids
            FROM organizations o WHERE o.id = $1`,
@@ -239,6 +247,10 @@ export async function getOrganizationProfile(driver: Driver, userId: string, org
       hasLogo: r.has_logo as boolean,
       logoAlt: r.logo_alt as string | null,
       profileStatus: r.profile_status as OrganizationProfile["profileStatus"],
+      donationUrl: (r.donation_url as string | null) ?? null,
+      donationUrlStatus: r.donation_url_status as DonationUrlStatus,
+      donationUrlReviewNote: (r.donation_url_review_note as string | null) ?? null,
+      acceptedOfferTypes: r.accepted as OfferType[],
     };
   });
 }
@@ -282,6 +294,8 @@ export const profileSchema = z.object({
   directoryConsent: checkbox,
   socialLinks: socialLinksSchema,
   countyIds: z.preprocess((v) => (v === undefined || v === "" ? [] : Array.isArray(v) ? v : [v]), z.array(z.string().uuid()).max(100)),
+  donationUrl: optional(300).refine((v) => v === null || parseWebUrl(v).ok, "Enter a full web address starting with http:// or https://"),
+  acceptedOfferTypes: z.preprocess((v) => (v === undefined || v === "" ? [] : Array.isArray(v) ? v : [v]), z.array(z.enum(OFFER_TYPES)).max(10)),
 });
 
 /** Org admins maintain their public profile and Contacts consent. The primary type stays admin-confirmed. */
@@ -289,14 +303,15 @@ export async function updateOrganizationProfile(driver: Driver, userId: string, 
   const input = parseOrThrow(profileSchema, raw);
   if (!z.string().uuid().safeParse(orgId).success) throw new AppError("NOT_FOUND", "Organization not found.");
   const website = input.website ? (parseWebUrl(input.website) as { ok: true; url: string }).url : null;
+  const donationUrl = input.donationUrl ? (parseWebUrl(input.donationUrl) as { ok: true; url: string }).url : null;
   try {
     await runIn(driver, { kind: "system" }, async (tx) => {
       const role = await membershipRole(tx, orgId, userId);
       if (role !== "ORG_ADMIN") throw new AppError("FORBIDDEN", "Only organization administrators can edit the profile.");
       const before = (
-        await tx.query<{ status: string; consent: Date | null; primary_type: string | null; requested: string | null }>(
+        await tx.query<{ status: string; consent: Date | null; primary_type: string | null; requested: string | null; donation_url: string | null }>(
           `SELECT status::text AS status, directory_consent_at AS consent, primary_service_type AS primary_type,
-                  requested_service_type AS requested FROM organizations WHERE id = $1`,
+                  requested_service_type AS requested, donation_url FROM organizations WHERE id = $1`,
           [orgId],
         )
       )[0];
@@ -305,12 +320,19 @@ export async function updateOrganizationProfile(driver: Driver, userId: string, 
       }
       await tx.query(
         `UPDATE organizations SET description = $2, website = $3, public_phone = $4, public_email = $5, public_postal_code = $8,
-                social_links = $9::jsonb,
+                social_links = $9::jsonb, donation_url = $10,
                 directory_consent_at = CASE WHEN $6 THEN coalesce(directory_consent_at, now()) ELSE NULL END,
                 directory_consent_by = CASE WHEN $6 THEN coalesce(directory_consent_by, $7::uuid) ELSE NULL END
           WHERE id = $1`,
         [orgId, input.description, website, input.publicPhone, input.publicEmail, input.directoryConsent, userId, input.publicPostalCode,
-         JSON.stringify(input.socialLinks)],
+         JSON.stringify(input.socialLinks), donationUrl],
+      );
+      // Offer types the organization accepts from givers (replaced wholesale, like counties served).
+      const accepted = Array.from(new Set(input.acceptedOfferTypes));
+      await tx.query(`DELETE FROM organization_accepted_offer_types WHERE org_id = $1 AND NOT (offer_type = ANY($2::text[]))`, [orgId, accepted]);
+      await tx.query(
+        `INSERT INTO organization_accepted_offer_types (org_id, offer_type) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
+        [orgId, accepted],
       );
       const keep = [before.primary_type ?? before.requested].filter((v): v is string => Boolean(v));
       const offered = Array.from(new Set([...keep, ...input.additionalServiceTypes]));
@@ -332,7 +354,10 @@ export async function updateOrganizationProfile(driver: Driver, userId: string, 
         subjectType: "organization",
         subjectId: orgId,
         action: consentChanged ? (input.directoryConsent ? "DIRECTORY_CONSENT_GRANTED" : "DIRECTORY_CONSENT_WITHDRAWN") : "ORG_PROFILE_UPDATED",
-        details: { services: offered, counties: ids.length, socialLinks: Object.keys(input.socialLinks) },
+        details: {
+          services: offered, counties: ids.length, socialLinks: Object.keys(input.socialLinks),
+          donationLinkChanged: before.donation_url !== donationUrl, acceptedTypes: accepted.length,
+        },
       });
     });
   } catch (err) {
@@ -421,6 +446,8 @@ export type PublicOrganization = {
   publicEmail: string | null; publicPostalCode: string | null; serviceType: string; serviceLabel: string; serviceShort: string;
   serviceColor: string; additionalServiceTypes: string[]; countiesServed: string[]; socialLinks: Partial<Record<SocialKind, string>>;
   hasLogo: boolean; logoAlt: string | null; publicSiteCount: number; isSynthetic: boolean;
+  /** The organization's own donation page, only while an administrator has approved it. */
+  donationUrl: string | null; acceptedOfferTypes: OfferType[];
 };
 
 /** An approved, consented, admin-approved profile only. Anything else is indistinguishable from "does not exist". */
@@ -430,7 +457,8 @@ export async function getPublicOrganization(driver: Driver, orgId: string): Prom
     tx.query<Record<string, unknown>>(
       `SELECT id, display_name, description, website, public_phone, public_email, public_postal_code, service_type, service_label,
               service_short, service_color, additional_service_types, counties_served, social_links,
-              logo_storage_key IS NOT NULL AS has_logo, logo_alt, public_site_count, is_synthetic
+              logo_storage_key IS NOT NULL AS has_logo, logo_alt, public_site_count, is_synthetic,
+              donation_url, accepted_offer_types
          FROM public_contacts WHERE id = $1`,
       [orgId],
     ),
@@ -446,6 +474,7 @@ export async function getPublicOrganization(driver: Driver, orgId: string): Prom
     socialLinks: (r.social_links as Partial<Record<SocialKind, string>>) ?? {},
     hasLogo: r.has_logo as boolean, logoAlt: r.logo_alt as string | null, publicSiteCount: r.public_site_count as number,
     isSynthetic: r.is_synthetic as boolean,
+    donationUrl: (r.donation_url as string | null) ?? null, acceptedOfferTypes: (r.accepted_offer_types as OfferType[]) ?? [],
   };
 }
 

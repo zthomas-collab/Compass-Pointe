@@ -22,6 +22,7 @@ import {
   updateOrganizationProfile,
   uploadOrganizationLogo,
 } from "@/server/modules/directory";
+import { reviewDonationLink } from "@/server/modules/giving";
 import { assignCountyAdmin, createCounty, revokeCountyAdmin } from "@/server/modules/counties";
 import { SOCIAL_KINDS } from "@/lib/links";
 import { MAX_UPLOAD_BYTES, removeSiteImage, uploadSiteImage } from "@/server/modules/images";
@@ -119,6 +120,7 @@ export async function updateProfileAction(orgId: string, _prev: FormState, form:
       ...fields(form),
       additionalServiceTypes: form.getAll("additionalServiceTypes"),
       countyIds: form.getAll("countyIds"),
+      acceptedOfferTypes: form.getAll("acceptedOfferTypes"),
       socialLinks: Object.fromEntries(SOCIAL_KINDS.map((k) => [k, String(form.get(`social_${k}`) ?? "")])),
     });
   } catch (err) {
@@ -209,6 +211,18 @@ export async function reviewProfileAction(_prev: FormState, form: FormData): Pro
   revalidatePath("/admin/profiles");
   revalidatePath("/contacts");
   return { ok: true, message: "Profile decision recorded." };
+}
+
+export async function reviewDonationLinkAction(_prev: FormState, form: FormData): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await reviewDonationLink(await getDriver(), user.id, fields(form));
+  } catch (err) {
+    return toState(err);
+  }
+  revalidatePath("/admin/profiles");
+  revalidatePath(`/orgs/${String(form.get("orgId") ?? "")}`);
+  return { ok: true, message: "Link decision recorded." };
 }
 
 export async function createCountyAction(_prev: FormState, form: FormData): Promise<FormState> {

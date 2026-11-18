@@ -15,6 +15,19 @@
 
 Verification (org status) and operational authority (responder role) are independent: an approved nonprofit does **not** see responder-only logistics unless a member also holds a scoped responder assignment.
 
+## Offers sent to an organization (migration 0017; tested in `tests/giving-db.test.ts`, `tests/org-offers.test.ts`)
+
+| Viewer | Offer and giver contact details | May act |
+|---|---|---|
+| Anonymous / public | ❌ | submit only |
+| ORG_ADMIN or EDITOR of the receiving organization, while it is eligible (approved, publishing, approved profile, directory consent) | ✅ | accept, schedule, complete, decline (reason), cancel (reason), notes |
+| VIEWER of the receiving organization | ❌ | — |
+| Any other organization | ❌ | — |
+| County administrator of a county the organization serves, or of the giver's county | ✅ | return to central triage (detaches the organization), cancel, notes |
+| Executive (PLATFORM_ADMIN) | ✅ | same as county administrator |
+
+A directed offer requires the giver's consent to share their details with that organization. When the organization stops being eligible, its members lose access immediately; administrators keep it. The organization's "Give money" link is public only while an administrator has approved it.
+
 ## Site and resource visibility (enforced by RLS + views; tested in `tests/visibility.test.ts`)
 
 | Viewer ↓ / Record visibility → | PUBLIC | ORGANIZATION_NETWORK | AUTHORIZED_RESPONDERS | PRIVATE_ORGANIZATION |

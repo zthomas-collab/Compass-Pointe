@@ -12,6 +12,11 @@ export function shiftPath(projectId: string): string {
   return `${VOLUNTEER_PATHS.shifts}/${projectId}`;
 }
 
-export function donatePath(type?: OfferType): string {
-  return type ? `${VOLUNTEER_PATHS.donate}?type=${type}` : VOLUNTEER_PATHS.donate;
+/** The donate page, optionally for one organization (`org`) and with what is being given preselected (`type`). */
+export function donatePath(type?: OfferType, orgId?: string): string {
+  const q = new URLSearchParams();
+  if (orgId) q.set("org", orgId);
+  if (type) q.set("type", type);
+  const s = q.toString();
+  return s ? `${VOLUNTEER_PATHS.donate}?${s}` : VOLUNTEER_PATHS.donate;
 }

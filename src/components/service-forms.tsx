@@ -6,6 +6,7 @@ import type { ServiceType } from "@/server/modules/directory";
 import { ORG_TYPES, ORG_TYPE_LABELS } from "@/lib/domain";
 import { SOCIAL_KINDS, SOCIAL_LABELS, type SocialKind } from "@/lib/links";
 import type { County } from "@/server/modules/counties";
+import { OFFER_TYPES, OFFER_TYPE_LABELS } from "@/lib/offers";
 import { Field, FieldError, FormMessage, SubmitButton } from "./forms";
 
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
@@ -101,7 +102,9 @@ export function ProfileForm({
   action: Action;
   serviceTypes: ServiceType[];
   counties: Pick<County, "id" | "name" | "state">[];
-  initial: { description: string | null; website: string | null; publicPhone: string | null; publicEmail: string | null; publicPostalCode: string | null; additional: string[]; consent: boolean; primary: string | null; social: Partial<Record<SocialKind, string>>; countyIds: string[] };
+  initial: { description: string | null; website: string | null; publicPhone: string | null; publicEmail: string | null; publicPostalCode: string | null; additional: string[]; consent: boolean; primary: string | null; social: Partial<Record<SocialKind, string>>; countyIds: string[];
+    donationUrl: string | null; donationUrlStatus: "NONE" | "PENDING" | "APPROVED" | "REJECTED"; donationUrlReviewNote: string | null;
+    acceptedOfferTypes: string[] };
 }) {
   const [state, formAction] = useActionState(action, {});
   const primaryType = serviceTypes.find((t) => t.code === initial.primary);
@@ -168,10 +171,55 @@ export function ProfileForm({
           <FieldError state={state} name="countyIds" />
         </fieldset>
       )}
+      <GivingFields state={state} initial={initial} />
       <ServiceTypeFields serviceTypes={serviceTypes} state={state} showPrimary={false} defaultPrimary={initial.primary} defaultAdditional={initial.additional} />
       <ConsentField defaultChecked={initial.consent} />
       <SubmitButton>Save profile</SubmitButton>
     </form>
+  );
+}
+
+const DONATION_STATUS: Record<"PENDING" | "APPROVED" | "REJECTED", { label: string; tone: string }> = {
+  PENDING: { label: "Waiting for approval", tone: "tone-warn" },
+  APPROVED: { label: "Approved: shown on your public profile", tone: "tone-ok" },
+  REJECTED: { label: "Not approved", tone: "tone-bad" },
+};
+
+/** Giving: the organization's own donation link (administrator-approved) and the kinds of in-kind giving it accepts. */
+function GivingFields({ state, initial }: {
+  state: FormState;
+  initial: { donationUrl: string | null; donationUrlStatus: "NONE" | "PENDING" | "APPROVED" | "REJECTED"; donationUrlReviewNote: string | null; acceptedOfferTypes: string[] };
+}) {
+  const status = initial.donationUrlStatus === "NONE" ? null : DONATION_STATUS[initial.donationUrlStatus];
+  return (
+    <fieldset className="grid gap-3 rounded-lg border border-line p-3">
+      <legend className="px-1 text-sm font-semibold">Giving</legend>
+      <label className="field">
+        <span>Give money link (optional)</span>
+        <small className="text-muted">Your own donation page. An administrator approves it before it appears publicly; changing it sends it back for approval.</small>
+        <input name="donationUrl" type="url" className="input" placeholder="https://" maxLength={300} defaultValue={initial.donationUrl ?? ""} />
+        <FieldError state={state} name="donationUrl" />
+      </label>
+      {status && (
+        <p className="text-sm" role="status">
+          <span className={`badge ${status.tone}`}>{status.label}</span>
+          {initial.donationUrlStatus === "REJECTED" && initial.donationUrlReviewNote && <span className="ml-2">{initial.donationUrlReviewNote}</span>}
+        </p>
+      )}
+      <div>
+        <p className="text-sm font-semibold" id="accepted-h">Offers we accept</p>
+        <p className="text-xs text-muted">Givers can send you only these kinds of offers. Leave all unticked to receive none.</p>
+        <div className="mt-1 grid gap-1 sm:grid-cols-2" role="group" aria-labelledby="accepted-h">
+          {OFFER_TYPES.map((t) => (
+            <label key={t} className="flex min-h-11 items-center gap-2 text-sm">
+              <input type="checkbox" name="acceptedOfferTypes" value={t} defaultChecked={initial.acceptedOfferTypes.includes(t)} />
+              {OFFER_TYPE_LABELS[t]}
+            </label>
+          ))}
+        </div>
+        <FieldError state={state} name="acceptedOfferTypes" />
+      </div>
+    </fieldset>
   );
 }
 
@@ -332,6 +380,32 @@ export function LogoForm({ uploadAction, removeAction, hasLogo, logoSrc }: { upl
         </form>
       )}
     </div>
+  );
+}
+
+/** Approve or reject an organization's pending "Give money" link. Rejecting needs a reason the organization will see. */
+export function DonationLinkReviewForm({ action, orgId, url }: { action: Action; orgId: string; url: string }) {
+  const [state, formAction] = useActionState(action, {});
+  if (state.ok) return <FormMessage state={state} />;
+  return (
+    <form action={formAction} className="grid gap-2 sm:grid-cols-[10rem_1fr_auto] sm:items-end">
+      <input type="hidden" name="orgId" value={orgId} />
+      <input type="hidden" name="url" value={url} />
+      <label className="field">
+        <span>Link decision</span>
+        <select name="decision" className="input" defaultValue="APPROVED">
+          <option value="APPROVED">Approve</option>
+          <option value="REJECTED">Don&apos;t approve</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Reason (required to not approve)</span>
+        <input name="note" className="input" maxLength={2000} />
+        <FieldError state={state} name="note" />
+      </label>
+      <SubmitButton className="btn btn-secondary">Record decision</SubmitButton>
+      <div className="sm:col-span-3"><FormMessage state={state} /></div>
+    </form>
   );
 }
 

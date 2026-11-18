@@ -6,8 +6,9 @@ import { AppError } from "@/server/errors";
 import { listProfilesForReview } from "@/server/modules/directory";
 import { SOCIAL_KINDS, SOCIAL_LABELS } from "@/lib/links";
 import { requireUser } from "@/server/session";
-import { ProfileReviewForm } from "@/components/service-forms";
-import { reviewProfileAction } from "@/app/dashboard/actions";
+import { DonationLinkReviewForm, ProfileReviewForm } from "@/components/service-forms";
+import { reviewDonationLinkAction, reviewProfileAction } from "@/app/dashboard/actions";
+import { listDonationLinksForReview } from "@/server/modules/giving";
 
 export const metadata: Metadata = { title: "Organization profiles", robots: { index: false } };
 export const dynamic = "force-dynamic";
@@ -16,9 +17,10 @@ const TONE: Record<string, string> = { APPROVED: "tone-ok", PENDING: "tone-warn"
 
 export default async function AdminProfilesPage() {
   const user = await requireUser();
-  let rows;
+  let rows, links;
   try {
-    rows = await listProfilesForReview(await getDriver(), user.id);
+    const db = await getDriver();
+    [rows, links] = await Promise.all([listProfilesForReview(db, user.id), listDonationLinksForReview(db, user.id)]);
   } catch (err) {
     if (err instanceof AppError && err.code === "FORBIDDEN") notFound();
     throw err;
@@ -31,6 +33,29 @@ export default async function AdminProfilesPage() {
         A profile is public only when the organization is approved, has opted in, and its profile is approved here.
         County administrators see organizations that serve their counties.
       </p>
+      {links.length > 0 && (
+        <section className="mt-5" aria-labelledby="links-h">
+          <h2 id="links-h" className="text-xl">Give money links waiting ({links.length})</h2>
+          <p className="text-sm text-muted">
+            Check that each link is the organization&apos;s own donation page before approving. It appears on their public profile and event pages.
+          </p>
+          <ul className="mt-3 grid gap-3">
+            {links.map((l) => (
+              <li key={l.orgId} className="card border-2 border-gold p-4">
+                <p className="font-semibold">{l.displayName}</p>
+                <p className="mt-1 break-all text-sm">
+                  <strong>{l.host}</strong>{" "}
+                  <a className="underline" href={l.url} target="_blank" rel="noopener noreferrer nofollow">
+                    {l.url}<span className="sr-only"> (opens in a new tab)</span>
+                  </a>
+                </p>
+                <p className="text-xs text-muted">Counties served: {l.countiesServed.join("; ") || "—"}</p>
+                <div className="mt-3"><DonationLinkReviewForm action={reviewDonationLinkAction} orgId={l.orgId} url={l.url} /></div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <ul className="mt-5 grid gap-4">
         {rows.map((o) => (
           <li key={o.id} className="card p-4">

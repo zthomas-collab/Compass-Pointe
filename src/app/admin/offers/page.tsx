@@ -10,7 +10,7 @@ import { requireUser } from "@/server/session";
 export const metadata: Metadata = { title: "Volunteer & donation offers", robots: { index: false } };
 export const dynamic = "force-dynamic";
 
-type Search = { status?: string; type?: string; countyId?: string; page?: string };
+type Search = { status?: string; type?: string; countyId?: string; destination?: string; page?: string };
 const fmt = (d: Date) => d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 
 export default async function OffersQueue({ searchParams }: { searchParams: Promise<Search> }) {
@@ -34,7 +34,7 @@ export default async function OffersQueue({ searchParams }: { searchParams: Prom
         {OFFER_STATUSES.map((s) => <li key={s} className="badge tone-muted">{OFFER_STATUS_LABELS[s]}: {r.counts[s] ?? 0}</li>)}
         {r.unassigned > 0 && <li className="badge tone-warn">Needs a county: {r.unassigned}</li>}
       </ul>
-      <form method="get" className="card mt-4 grid gap-3 p-4 sm:grid-cols-4">
+      <form method="get" className="card mt-4 grid gap-3 p-4 sm:grid-cols-5">
         <label className="field"><span>Status</span>
           <select className="input" name="status" defaultValue={sp.status ?? ""}><option value="">Any</option>
             {OFFER_STATUSES.map((s) => <option key={s} value={s}>{OFFER_STATUS_LABELS[s]}</option>)}</select></label>
@@ -44,6 +44,9 @@ export default async function OffersQueue({ searchParams }: { searchParams: Prom
         <label className="field"><span>County</span>
           <select className="input" name="countyId" defaultValue={sp.countyId ?? ""}><option value="">Any</option>
             {counties.map((c) => <option key={c.id} value={c.id}>{c.name}, {c.state}</option>)}</select></label>
+        <label className="field"><span>Sent to</span>
+          <select className="input" name="destination" defaultValue={sp.destination ?? ""}><option value="">Anyone</option>
+            <option value="central">Coordinators (central)</option><option value="org">An organization</option></select></label>
         <div className="flex items-end"><button className="btn btn-primary w-full" type="submit">Filter</button></div>
       </form>
       <section className="card mt-4 p-4" aria-label="Offers">
@@ -53,6 +56,7 @@ export default async function OffersQueue({ searchParams }: { searchParams: Prom
               <li key={o.id} className="py-3">
                 <Link className="font-semibold text-brand underline" href={`/admin/offers/${o.id}`}>{o.reference}</Link>{" "}
                 <span className="badge tone-brand">{OFFER_STATUS_LABELS[o.status]}</span>
+                {o.recipientOrgName && <> <span className="badge tone-muted">Sent to {o.recipientOrgName}</span></>}
                 <div className="mt-1 text-sm">
                   {OFFER_TYPE_LABELS[o.contributionType]}{o.quantity !== null ? ` · ${o.quantity}${o.unit ? ` ${o.unit}` : ""}` : ""} ·{" "}
                   {o.countyName ? `${o.countyName} County` : "county not set"} · {o.zip}
