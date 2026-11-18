@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Driver } from "../db";
 import { runIn } from "../db/context";
-import { publicNeeds, toPublicProject, type DbPublicProject, type PublicProject } from "./projects";
+import { publicNeeds, publicProjectColumns, toPublicProject, type DbPublicProject, type PublicProject } from "./projects";
 
 /**
  * What a public organization profile shows besides its own details: its locations on the public map, its open
@@ -28,8 +28,7 @@ export async function getPublicOrganizationActivity(driver: Driver, orgId: strin
     const sites = await tx.query<{ id: string; name: string; city: string | null; state: string | null }>(
       `SELECT id, name, city, state FROM public_sites WHERE org_id = $1 ORDER BY name, id LIMIT 100`, [id.data]);
     const projectRows = await tx.query<DbPublicProject>(
-      `SELECT p.id, p.org_id, p.org_name, p.title, p.description, p.county_name, p.state, p.zip, p.audience, p.total_slots,
-              p.has_urgent, p.site_id, EXISTS (SELECT 1 FROM public_sites ps WHERE ps.id = p.site_id) AS site_public
+      `SELECT ${publicProjectColumns("p")}
          FROM public_projects p WHERE p.org_id = $1
         ORDER BY p.has_urgent DESC, p.title, p.id LIMIT 100`,
       [id.data],

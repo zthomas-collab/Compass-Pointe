@@ -3,7 +3,7 @@ import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError, fromDbError } from "../errors";
 import type { EventStatus } from "./events";
-import { publicNeeds, toPublicProject, type DbPublicProject, type PublicProject } from "./projects";
+import { publicNeeds, publicProjectColumns, toPublicProject, type DbPublicProject, type PublicProject } from "./projects";
 import { canManageCounty, loadAccess } from "./access";
 import { membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
@@ -223,7 +223,7 @@ export async function listEventProjects(driver: Driver, eventId: string): Promis
     const open = await tx.query(`SELECT 1 FROM public_events WHERE id = $1 AND status IN ('ACTIVE','RECOVERY')`, [eventId]);
     if (!open.length) return [];
     const rows = await tx.query<DbPublicProject>(
-      `SELECT p.id, p.org_id, p.org_name, p.title, p.description, p.county_name, p.state, p.zip, p.audience, p.total_slots, p.has_urgent
+      `SELECT ${publicProjectColumns("p")}
          FROM public_event_links l JOIN public_projects p ON p.id = l.project_id
         WHERE l.event_id = $1
         ORDER BY p.has_urgent DESC,
