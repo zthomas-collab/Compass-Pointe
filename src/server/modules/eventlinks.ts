@@ -7,6 +7,7 @@ import { publicNeeds, toPublicProject, type DbPublicProject, type PublicProject 
 import { canManageCounty, loadAccess } from "./access";
 import { membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
+import { inEventAreaSql } from "./sql";
 import { writeAudit } from "./shared";
 
 /** In what capacity someone decides about a link: as the owning organization, or as an administrator of the county. */
@@ -14,20 +15,13 @@ export type DecisionRole = "ORG" | "ADMIN";
 
 const uuid = (v: unknown) => parseOrThrow(z.string().uuid(), v);
 
-/**
- * Is the project inside the event's area right now? When the event names ZIP codes, the project's ZIP must be one of
- * them; otherwise the project's county must be one of the event's counties. (The same rule the event's Help list and
- * the public_event_links view use.)
- */
+/** Is the project inside the event's area right now? (The rule is inEventAreaSql in ./sql.) False for an unknown project. */
 export async function projectInEventArea(tx: Tx, projectId: string, eventId: string): Promise<boolean> {
   const r = await tx.query<{ ok: boolean }>(
-    `SELECT CASE WHEN EXISTS (SELECT 1 FROM event_zips WHERE event_id = $2)
-                 THEN EXISTS (SELECT 1 FROM event_zips z JOIN projects p ON p.id = $1 WHERE z.event_id = $2 AND z.zip = p.zip)
-                 ELSE EXISTS (SELECT 1 FROM event_counties ec JOIN projects p ON p.id = $1 WHERE ec.event_id = $2 AND ec.county_id = p.county_id)
-            END AS ok`,
+    `SELECT ${inEventAreaSql("$2::uuid", "p.zip", "p.county_id")} AS ok FROM projects p WHERE p.id = $1`,
     [projectId, eventId],
   );
-  return r[0].ok;
+  return r[0]?.ok ?? false;
 }
 
 /**
@@ -167,9 +161,13 @@ export async function listProjectEventLinks(driver: Driver, userId: string, proj
     const p = await readableProject(tx, userId, projectId);
     if (!p) return [];
     const role = await decisionRole(tx, userId, p);
-    const rows = await tx.query<{ event_id: string; name: string; slug: string; status: EventStatus; state: "CONFIRMED" | "DISMISSED"; decided_by_role: string | null }>(
-      `SELECT l.event_id, e.name, e.slug, e.status, l.state, l.decided_by_role
-         FROM project_event_links l JOIN events e ON e.id = l.event_id
+    const rows = await tx.query<{
+      event_id: string; name: string; slug: string; status: EventStatus; state: "CONFIRMED" | "DISMISSED"; decided_by_role: string | null;
+      in_area: boolean;
+    }>(
+      `SELECT l.event_id, e.name, e.slug, e.status, l.state, l.decided_by_role,
+              ${inEventAreaSql("l.event_id", "p.zip", "p.county_id")} AS in_area
+         FROM project_event_links l JOIN events e ON e.id = l.event_id JOIN projects p ON p.id = l.project_id
         WHERE l.project_id = $1 AND l.state IN ('CONFIRMED','DISMISSED')
         ORDER BY e.starts_on DESC, e.name, e.id`,
       [projectId],
@@ -177,7 +175,7 @@ export async function listProjectEventLinks(driver: Driver, userId: string, proj
     const out: ProjectEventLink[] = [];
     for (const r of rows) {
       const open = r.status === "ACTIVE" || r.status === "RECOVERY";
-      const inArea = await projectInEventArea(tx, projectId, r.event_id);
+      const inArea = r.in_area;
       out.push({
         eventId: r.event_id, eventName: r.name, eventSlug: r.slug, eventStatus: r.status, state: r.state,
         dismissedBy: r.state === "DISMISSED" ? (r.decided_by_role as DecisionRole | null) : null,
@@ -204,9 +202,7 @@ export async function listLinkableEvents(driver: Driver, userId: string, project
       `SELECT e.id, e.name, e.slug, e.status
          FROM events e JOIN projects p ON p.id = $1
         WHERE e.status IN ('ACTIVE','RECOVERY')
-          AND CASE WHEN EXISTS (SELECT 1 FROM event_zips z WHERE z.event_id = e.id)
-                   THEN EXISTS (SELECT 1 FROM event_zips z WHERE z.event_id = e.id AND z.zip = p.zip)
-                   ELSE EXISTS (SELECT 1 FROM event_counties ec WHERE ec.event_id = e.id AND ec.county_id = p.county_id) END
+          AND ${inEventAreaSql("e.id", "p.zip", "p.county_id")}
           AND NOT EXISTS (SELECT 1 FROM project_event_links l
                            WHERE l.project_id = p.id AND l.event_id = e.id
                              AND (l.state = 'CONFIRMED' OR (l.state = 'DISMISSED' AND l.decided_by_role = 'ADMIN' AND $2 = 'ORG')))
@@ -287,14 +283,18 @@ export async function listSuggestions(
          JOIN events e ON e.id = l.event_id
         WHERE l.state = 'SUGGESTED' AND ${byProject ? "l.project_id" : "l.event_id"} = $1
           AND e.status IN ('ACTIVE','RECOVERY') AND p.status NOT IN ('COMPLETED','CANCELLED')
+          AND ${inEventAreaSql("e.id", "p.zip", "p.county_id")}
         ORDER BY e.starts_on DESC, e.name, p.title, p.id
         LIMIT 200`,
       [id],
     );
+    // The decision role depends only on the project's org and county: look it up once per pair, not once per row.
+    const roles = new Map<string, DecisionRole | null>();
     const out: EventSuggestion[] = [];
     for (const r of rows) {
-      if (!(await decisionRole(tx, userId, r))) continue;
-      if (!(await projectInEventArea(tx, r.project_id, r.event_id))) continue;
+      const key = `${r.org_id}|${r.county_id}|${r.org_ok}`;
+      if (!roles.has(key)) roles.set(key, await decisionRole(tx, userId, r));
+      if (!roles.get(key)) continue;
       out.push({
         projectId: r.project_id, projectTitle: r.title, orgName: r.org_name, eventId: r.event_id, eventName: r.event_name, eventSlug: r.event_slug,
       });

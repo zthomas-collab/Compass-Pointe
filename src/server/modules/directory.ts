@@ -8,6 +8,7 @@ import { assertPlatformAdmin } from "./organizations";
 import { loadAccess } from "./access";
 import { processImage } from "./images";
 import { writeAudit } from "./shared";
+import { likePattern } from "./sql";
 import type { ObjectStore } from "../storage";
 import { SOCIAL_KINDS, parseSocialLink, parseWebUrl, type SocialKind } from "@/lib/links";
 import { OFFER_TYPES, type OfferType } from "@/lib/offers";
@@ -82,9 +83,6 @@ export type ContactsSearch = {
   zipResolution: "zip_table" | "site_centroid" | "unknown" | null;
 };
 
-function likePattern(q: string) {
-  return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-}
 
 /**
  * Public Contacts search (no sign-in). Runs as ics_anon against public read models only.

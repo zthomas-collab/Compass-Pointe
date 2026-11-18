@@ -6,6 +6,7 @@ import { AppError, fromDbError } from "../errors";
 import { canManageCounty, loadAccess } from "./access";
 import { DEFAULT_RADIUS_MILES, RADIUS_OPTIONS_MILES, membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
+import { likePattern } from "./sql";
 import { writeAudit } from "./shared";
 import { suggestForProject } from "./suggestions";
 import { TAKEN_SQL, noticeProjectCancelled } from "./volunteers";
@@ -583,7 +584,6 @@ export const projectSearchSchema = z.object({
 });
 
 const METERS_PER_MILE = 1609.344;
-const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 export type DbPublicProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
