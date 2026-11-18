@@ -1,17 +1,21 @@
 import Link from "next/link";
-import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS } from "@/lib/offers";
+import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS, type OfferType } from "@/lib/offers";
 import { donatePath } from "@/lib/volunteer-paths";
 
-/** "What are you giving?": one large link card per offer type. Each is a plain link, so it works without JavaScript. */
-export function DonateChooser() {
+/**
+ * "What are you giving?": one large link card per offer type. Each is a plain link, so it works without JavaScript.
+ * For a chosen organization, `allowedTypes` limits the cards to what it accepts and `orgId` keeps it in each link.
+ */
+export function DonateChooser({ allowedTypes, orgId }: { allowedTypes?: readonly OfferType[]; orgId?: string } = {}) {
+  const types = allowedTypes ? OFFER_TYPES.filter((t) => allowedTypes.includes(t)) : OFFER_TYPES;
   return (
     <ul className="mt-4 grid gap-3 sm:grid-cols-2" aria-label="What would you like to give?">
-      {OFFER_TYPES.map((code) => {
+      {types.map((code) => {
         const info = OFFER_TYPE_INFO[code];
         return (
           <li key={code}>
             <Link
-              href={donatePath(code)}
+              href={donatePath(code, orgId)}
               className="card flex h-full gap-3 p-4 no-underline transition hover:border-brand hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
             >
               <span aria-hidden="true" className="text-3xl leading-none">{info.glyph}</span>

@@ -7,7 +7,8 @@ import { getDriver } from "@/server/db";
 import { formatShift } from "@/lib/shift";
 import { shiftPath } from "@/lib/volunteer-paths";
 import { listEventProjects } from "@/server/modules/eventlinks";
-import { getEventHelp, getPublicEvent } from "@/server/modules/events";
+import { getEventHelp, getPublicEvent, listEventHelpers } from "@/server/modules/events";
+import { GiveCard } from "@/components/give-card";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,9 @@ export default async function EventPage({ params }: Params) {
   const db = await getDriver();
   const event = await getPublicEvent(db, slug);
   if (!event) notFound();
-  const [help, projects] = await Promise.all([getEventHelp(db, event.id), listEventProjects(db, event.id)]);
+  const [help, projects, helpers] = await Promise.all([
+    getEventHelp(db, event.id), listEventProjects(db, event.id), listEventHelpers(db, event.id),
+  ]);
   const spotsLeft = projects.reduce((sum, p) => sum + p.spotsLeft, 0);
   const area = event.zips.length
     ? `ZIP codes ${event.zips.join(", ")}`
@@ -72,6 +75,19 @@ export default async function EventPage({ params }: Params) {
         )}
         <p className="mt-3 text-sm"><Link className="underline" href="/">See all sites on the map</Link></p>
       </section>
+
+      {helpers.length > 0 && (
+        <section className="mt-8" aria-labelledby="helpers-h">
+          <h2 id="helpers-h" className="text-xl">Who&apos;s helping</h2>
+          <p className="mt-1 text-sm text-muted">Organizations working this disaster. Give to them directly.</p>
+          <ul className="mt-3 grid gap-3">
+            {helpers.map((h) => {
+              const firstProject = projects.find((p) => p.orgId === h.orgId);
+              return <li key={h.orgId}><GiveCard org={h} volunteerHref={firstProject ? shiftPath(firstProject.id) : undefined} /></li>;
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="mt-8" aria-labelledby="needs-h">
         <h2 id="needs-h" className="text-xl">Needs</h2>

@@ -13,6 +13,7 @@ export function OfferForm({
   types,
   defaultType,
   typeHints,
+  organization,
 }: {
   action: Action;
   counties: County[];
@@ -21,11 +22,15 @@ export function OfferForm({
   defaultType?: string;
   /** Hints for the quantity and unit fields that fit the chosen type. */
   typeHints?: { quantityHint: string; unitHint: string };
+  /** Sends the offer to this organization instead of the central coordinators; sharing details becomes required. */
+  organization?: { id: string; name: string };
 }) {
   const [state, formAction] = useActionState(action, {});
   return (
     <form action={formAction} className="grid gap-4">
       <FormMessage state={state} />
+      {organization && <input type="hidden" name="organizationId" value={organization.id} />}
+      <FieldError state={state} name="organizationId" />
       {/* Trap field for bots: hidden from people and assistive technology. */}
       <div aria-hidden className="absolute -left-[9999px]">
         <label>Website<input name="website" tabIndex={-1} autoComplete="off" /></label>
@@ -85,10 +90,18 @@ export function OfferForm({
         <span>You may contact me about this offer.</span>
       </label>
       <FieldError state={state} name="consentContact" />
-      <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" name="consentShare" className="mt-1 h-5 w-5" />
-        <span>You may share my contact details with an approved organization that can use this offer (optional).</span>
-      </label>
+      {organization ? (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" name="consentShare" className="mt-1 h-5 w-5" required />
+          <span>Share my name, email and phone with {organization.name} so they can arrange this.</span>
+        </label>
+      ) : (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" name="consentShare" className="mt-1 h-5 w-5" />
+          <span>You may share my contact details with an approved organization that can use this offer (optional).</span>
+        </label>
+      )}
+      <FieldError state={state} name="consentShare" />
       <p className="rounded-md bg-neutral-bg p-3 text-sm">Sending an offer does not commit anyone to accept it, and we cannot guarantee it will be used.</p>
       <SubmitButton>Send my offer</SubmitButton>
     </form>

@@ -8,6 +8,7 @@ import { SOCIAL_KINDS, SOCIAL_LABELS, prettyUrl } from "@/lib/links";
 import { telHref } from "@/lib/domain";
 import { ServiceBadge } from "@/components/service-forms";
 import { SyntheticBadge } from "@/components/status";
+import { AcceptsLine, GiveActions } from "@/components/give-card";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,14 @@ export default async function PublicOrganizationPage({ params }: Params) {
           {org.additionalServiceTypes.map((c) => typeOf(c) && <ServiceBadge key={c} type={typeOf(c)!} />)}
         </div>
         {org.description && <p className="mt-4 whitespace-pre-wrap">{org.description}</p>}
+
+        {(org.acceptedOfferTypes.length > 0 || org.donationUrl) && (
+          <section className="mt-4 grid gap-2 rounded-lg border border-line p-3" aria-labelledby="give-h">
+            <h2 id="give-h" className="text-sm font-semibold">Help {org.displayName}</h2>
+            <AcceptsLine types={org.acceptedOfferTypes} />
+            <GiveActions org={{ orgId: org.id, displayName: org.displayName, acceptedOfferTypes: org.acceptedOfferTypes, donationUrl: org.donationUrl }} />
+          </section>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {org.website && (

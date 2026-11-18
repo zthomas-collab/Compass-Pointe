@@ -24,12 +24,15 @@ export async function submitOfferAction(_prev: FormState, form: FormData): Promi
   // Bots fill every field. A person never sees this one; pretend success and store nothing.
   if (text(form, "website")) redirect("/volunteer/thanks");
   let reference: string;
+  let organizationName: string | null;
   try {
-    ({ reference } = await submitOffer(await getDriver(), Object.fromEntries(form.entries())));
+    ({ reference, organizationName } = await submitOffer(await getDriver(), Object.fromEntries(form.entries())));
   } catch (err) {
     return toState(err);
   }
-  redirect(`/volunteer/thanks?ref=${encodeURIComponent(reference)}`);
+  // The thank-you page looks the organization up by id (never trusts a name from the address).
+  const org = organizationName ? `&org=${encodeURIComponent(text(form, "organizationId"))}` : "";
+  redirect(`/volunteer/thanks?ref=${encodeURIComponent(reference)}${org}`);
 }
 
 export async function offerTransitionAction(_prev: FormState, form: FormData): Promise<FormState> {
