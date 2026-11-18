@@ -7,14 +7,14 @@ import {
   STATUS_KEY,
   bestSiteStatus,
   displayAvailability,
-  telHref,
   type AvailabilityStatus,
   type Freshness,
-  type StatusKind,
 } from "@/lib/domain";
-import { StatusIcon, StatusPill } from "./status-icons";
-import { DirectionsMenu } from "./DirectionsMenu";
-import type { MapResult, MapSite, PlaceHit } from "@/server/modules/map";
+import { StatusPill } from "./status-icons";
+import { MapLegend } from "./MapLegend";
+import { SiteDetail } from "./SiteDetail";
+import { BRAND_FOREST, CHARCOAL, fmtTime, statusMatch } from "./map-shared";
+import type { MapResult, PlaceHit } from "@/server/modules/map";
 import type { ServiceType } from "@/server/modules/directory";
 
 type Bbox = { w: number; s: number; e: number; n: number };
@@ -23,25 +23,6 @@ type Category = { code: string; label: string };
 const STYLE_URL = process.env.NEXT_PUBLIC_MAP_STYLE_URL || "https://tiles.openfreemap.org/styles/liberty";
 const [DEF_LNG, DEF_LAT, DEF_ZOOM] = (process.env.NEXT_PUBLIC_DEFAULT_VIEW || "-82.55,35.6,9").split(",").map(Number);
 const MAX_SPAN = 12;
-
-/** Map-marker status badge colors (semantic, reserved for resource status). Text color keeps >= 4.5:1. */
-const STATUS_FILL: Record<StatusKind, { fill: string; text: string }> = {
-  available: { fill: "#2E7D32", text: "#FFFFFF" },
-  limited: { fill: "#F0B84B", text: "#24343A" },
-  depleted: { fill: "#C62828", text: "#FFFFFF" },
-  closed: { fill: "#B0BEC5", text: "#24343A" },
-  unknown: { fill: "#ECEFF1", text: "#24343A" },
-  unconfirmed: { fill: "#ECEFF1", text: "#24343A" },
-};
-const BRAND_FOREST = "#205C4B";
-const CHARCOAL = "#24343A";
-const statusMatch = (key: "fill" | "text") =>
-  ["match", ["get", "status"], ...STATUS_KEY.flatMap((k) => [k.kind, STATUS_FILL[k.kind][key]]), STATUS_FILL.unconfirmed[key]] as unknown as string;
-
-function fmtTime(iso: string | null) {
-  if (!iso) return "never";
-  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
 
 function boundsAround(lng: number, lat: number, d = 0.4): Bbox {
   return { w: lng - d, s: lat - d, e: lng + d, n: lat + d };
@@ -388,7 +369,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
       <div className="relative flex min-h-0 flex-1 md:h-[78vh] md:min-h-[30rem] md:flex-none">
         <div className={`${view === "map" ? "flex" : "hidden"} relative min-h-[55vh] flex-1 md:flex`}>
           {!mapFailed && (
-            <Legend serviceTypes={serviceTypes} selected={selectedServices} onToggle={toggleService} onReset={() => setSelectedServices([])} />
+            <MapLegend serviceTypes={serviceTypes} selected={selectedServices} onToggle={toggleService} onReset={() => setSelectedServices([])} />
           )}
           <div className="relative min-w-0 flex-1">
             {mapFailed ? (
@@ -449,166 +430,6 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
             )}
           </ul>
         </aside>
-      </div>
-    </div>
-  );
-}
-
-function SiteDetail({ site, stale, onClose }: { site: MapSite; stale: boolean; onClose: () => void }) {
-  const isPublic = site.visibility === "PUBLIC";
-  return (
-    <section className="card m-3 p-4" aria-labelledby="site-detail-h">
-      <div className="flex items-start gap-2">
-        <h2 id="site-detail-h" className="flex-1 text-lg font-bold">{site.name}</h2>
-        <button className="btn btn-secondary px-3" onClick={onClose} aria-label="Close details">✕</button>
-      </div>
-      <div className="mt-1 flex flex-wrap gap-1">
-        {site.isSynthetic && <span className="badge tone-warn">SYNTHETIC DEMO DATA — not a real resource</span>}
-        {!isPublic && <span className="badge tone-warn">Restricted: {site.visibility.replaceAll("_", " ").toLowerCase()} — do not share</span>}
-      </div>
-      {site.imageId && (
-        // eslint-disable-next-line @next/next/no-img-element -- authorized image route
-        <img src={`/api/sites/${site.id}/image?v=${site.imageId}`} alt={site.imageAlt ?? ""} className="mt-2 max-h-56 w-full rounded-lg object-cover" />
-      )}
-      {site.serviceLabel && (
-        <p className="mt-2 flex items-center gap-2 text-sm">
-          <span aria-hidden className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white" style={{ background: site.serviceColor ?? "#616161" }}>{site.serviceShort}</span>
-          {site.serviceLabel}
-        </p>
-      )}
-      <p className="mt-1 text-sm">
-        Operated by{" "}
-        {site.orgHasProfile
-          ? <a className="font-semibold underline" href={`/orgs/${site.orgId}`}>{site.orgName}</a>
-          : <strong>{site.orgName}</strong>}{" "}
-        <span className="badge tone-ok">Verified organization</span>
-      </p>
-      {(site.addressLine || site.city) && (
-        <p className="mt-1 text-sm">{[site.addressLine, site.city, site.state, site.postalCode].filter(Boolean).join(", ")}</p>
-      )}
-      {site.hoursText && <p className="mt-1 text-sm">Hours: {site.hoursText}</p>}
-      {site.description && <p className="mt-1 text-sm text-muted">{site.description}</p>}
-      <p className="mt-1 text-xs text-muted">Site last confirmed {fmtTime(site.lastConfirmedAt)}{stale ? " · this view may be out of date" : ""}</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {site.publicPhone && <a className="btn btn-primary" href={telHref(site.publicPhone)}>Call {site.publicPhone}</a>}
-        {isPublic && <DirectionsMenu lat={site.lat} lng={site.lng} />}
-      </div>
-      <h3 className="mt-4 font-semibold">Resources</h3>
-      <ul className="mt-1 divide-y divide-line">
-        {site.resources.map((r) => {
-          const d = displayAvailability(r.reportedStatus as AvailabilityStatus, r.freshness as Freshness);
-          return (
-            <li key={r.id} className="py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{r.name}</span>
-                <span className="text-xs text-muted">{r.categoryLabel}</span>
-                <StatusPill kind={d.kind} label={d.label} />
-                {r.visibility !== "PUBLIC" && <span className="badge tone-warn">Restricted</span>}
-              </div>
-              {d.note && <div className="text-xs text-muted">{d.note}</div>}
-              {r.reportedQuantity !== null && (
-                <div className="text-sm">{r.reportedQuantity} {r.quantityUnit} <span className="text-xs text-muted">({r.quantityBasis === "VERIFIED_COUNT" ? "verified count" : "reported by organization"})</span></div>
-              )}
-              <div className="text-xs text-muted">Last confirmed {fmtTime(r.lastConfirmedAt)}</div>
-            </li>
-          );
-        })}
-        {site.resources.length === 0 && <li className="py-2 text-sm text-muted">No resources listed.</li>}
-      </ul>
-      <p className="mt-3 text-xs text-muted">Call ahead before traveling. Availability is reported by the organization and can change quickly.</p>
-      {site.projects.length > 0 && (
-        <div className="mt-4 border-t border-line pt-3">
-          <h3 className="font-semibold">Volunteers needed here</h3>
-          <ul className="mt-1 divide-y divide-line">
-            {site.projects.map((p) => (
-              <li key={p.id} className="flex flex-wrap items-center gap-2 py-2">
-                <a className="font-medium text-brand underline" href={`/volunteer/projects/${p.id}`}>{p.title}</a>
-                {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent</span>}
-                <span className="text-sm text-muted">{p.spotsLeft > 0 ? `${p.spotsLeft} ${p.spotsLeft === 1 ? "spot" : "spots"} left` : "Full"}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {(site.orgDonationUrl || site.orgHasProfile) && (
-        <div className="mt-4 border-t border-line pt-3">
-          <h3 className="font-semibold">Want to support {site.orgName}?</h3>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {site.orgDonationUrl && (
-              <a className="btn btn-secondary" href={site.orgDonationUrl} target="_blank" rel="noopener noreferrer nofollow">
-                Give money <span aria-hidden="true">↗</span><span className="sr-only"> to {site.orgName} on their own website (opens in a new tab)</span>
-              </a>
-            )}
-            {site.orgHasProfile && <a className="btn btn-secondary" href={`/orgs/${site.orgId}`}>Other ways to help</a>}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * Map key: explains every color and mark used on the map. On larger screens it is a fixed
- * column on the left running the full height of the map. On phones it is a button that opens
- * the same full-height panel over the left side of the map.
- */
-function Legend({ serviceTypes, selected, onToggle, onReset }: { serviceTypes: ServiceType[]; selected: string[]; onToggle: (code: string) => void; onReset: () => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div
-      className={`z-10 flex flex-col bg-surface text-xs md:static md:w-56 md:flex-none xl:w-64 md:rounded-none md:border-0 md:border-r md:border-line md:shadow-none ${
-        open ? "absolute inset-y-0 left-0 w-[17rem] max-w-[85%] border-r border-line shadow-lg" : "absolute left-2 top-2 rounded-lg border border-line shadow"
-      }`}
-    >
-      <h2 className="m-0 border-line px-2 py-2 md:border-b">
-      <button type="button" className="flex w-full items-center justify-between gap-2 text-sm font-bold md:cursor-default" aria-expanded={open} aria-controls="map-key" onClick={() => setOpen((v) => !v)}>
-        Map key{selected.length ? ` · ${selected.length} type${selected.length === 1 ? "" : "s"} shown` : ""}
-        <span aria-hidden className="md:hidden">{open ? "▾" : "▸"}</span>
-      </button>
-      </h2>
-      <div id="map-key" className={`${open ? "block" : "hidden"} min-h-0 flex-1 overflow-y-auto px-2 pb-3 md:block`}>
-        <h3 className="mt-2 font-bold text-ink">Availability (badge on each pin)</h3>
-        <ul className="mt-1 grid gap-1">
-          {STATUS_KEY.filter((k) => k.kind !== "unknown").map((k) => (
-            <li key={k.kind} className="flex items-center gap-2">
-              <span aria-hidden className="inline-flex h-5 w-5 flex-none items-center justify-center rounded-full border text-[10px] font-bold"
-                style={{ background: STATUS_FILL[k.kind].fill, color: STATUS_FILL[k.kind].text, borderColor: CHARCOAL }}>{k.letter}</span>
-              <span className={`status status-${k.kind}`}><StatusIcon kind={k.kind} size={12} />{k.label}</span>
-              <span className="sr-only">: {k.meaning}</span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-1 text-muted">“?” also means the organization reported Unknown.</p>
-
-        <h3 className="mt-3 font-bold text-ink">Organization type (pin color + code)</h3>
-        <p className="text-muted">Tap a type to show only those.</p>
-        <ul className="mt-1 grid gap-0.5" aria-label="Filter by organization type">
-          {serviceTypes.map((t) => {
-            const on = selected.includes(t.code);
-            return (
-              <li key={t.code}>
-                <button type="button" aria-pressed={on} onClick={() => onToggle(t.code)}
-                  className={`flex min-h-8 w-full items-center gap-2 rounded px-1 text-left ${on ? "bg-mint-soft font-semibold ring-1 ring-brand" : "hover:bg-mint-soft"}`}>
-                  <span aria-hidden className="inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[9px] font-bold text-white" style={{ background: t.color }}>{t.shortLabel}</span>
-                  {t.label}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        {selected.length > 0 && <button type="button" className="mt-1 text-brand underline" onClick={onReset}>Show all types</button>}
-
-        <h3 className="mt-3 font-bold text-ink">Other marks</h3>
-        <ul className="mt-1 grid gap-1 text-ink">
-          <li className="flex items-center gap-2">
-            <span aria-hidden className="inline-flex h-6 w-6 flex-none items-center justify-center rounded-full text-[10px] font-bold text-white ring-2 ring-white" style={{ background: BRAND_FOREST }}>5</span>
-            Group of 5 locations — tap or zoom in
-          </li>
-          <li className="flex items-center gap-2">
-            <span aria-hidden className="inline-block h-6 w-6 flex-none rounded-full" style={{ background: "#263238", boxShadow: `0 0 0 4px ${CHARCOAL}`, outline: "2px solid #fff" }} />
-            Thick dark outline: restricted location (signed-in, authorized users only)
-          </li>
-        </ul>
       </div>
     </div>
   );
