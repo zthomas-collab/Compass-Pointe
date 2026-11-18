@@ -12,7 +12,7 @@ let exec: string, adminA: string, adminB: string, gAdmin: string, sAdmin: string
 let countyA: string, countyB: string, orgG: string, orgS: string, orgBare: string;
 const sys = <T>(fn: (tx: Tx) => Promise<T>) => runIn(db, { kind: "system" }, fn);
 const code = (p: Promise<unknown>) => p.then(() => "OK", (e) => (e as { code?: string }).code ?? "ERR");
-const fields = (p: Promise<unknown>) => p.then(() => ({}), (e) => (e as { fieldErrors?: Record<string, string[]> }).fieldErrors ?? {});
+const fields = (p: Promise<unknown>): Promise<Record<string, string[]>> => p.then(() => ({}),(e) => (e as { fieldErrors?: Record<string, string[]> }).fieldErrors ?? {});
 const LINK = "https://give.example.org/relief";
 const save = (userId: string, orgId: string, over: Record<string, unknown> = {}) =>
   updateOrganizationProfile(db, userId, orgId, { directoryConsent: "on", donationUrl: LINK, acceptedOfferTypes: ["FOOD", "DRINKING_WATER"], ...over });
