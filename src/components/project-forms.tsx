@@ -21,6 +21,10 @@ export function ProjectForm({
   project?: ProjectRow;
 }) {
   const [state, formAction] = useActionState(action, {});
+  // A project whose location can no longer be used starts with no location chosen, so the browser never quietly
+  // selects another one; the editor is told why and must pick.
+  const current = project?.siteId ? sites.find((s) => s.id === project.siteId) : undefined;
+  const currentUsable = current?.usable ?? false;
   return (
     <form action={formAction} className="grid gap-3 sm:grid-cols-2">
       <div className="sm:col-span-2"><FormMessage state={state} /></div>
@@ -35,7 +39,13 @@ export function ProjectForm({
       </label>
       <label className="field sm:col-span-2">
         <span>Location</span>
-        <select className="input" name="siteId" required defaultValue={project?.siteId ?? ""}>
+        {project && !currentUsable && (
+          <small className="text-bad" role="status">
+            {current ? `This project's location, ${current.name}, can't be used: ${current.reason}.` : "This project has no location yet."}{" "}
+            Choose a location below.
+          </small>
+        )}
+        <select className="input" name="siteId" required defaultValue={currentUsable ? project!.siteId! : ""}>
           <option value="" disabled>Choose one of your locations…</option>
           {sites.map((s) => (
             <option key={s.id} value={s.id} disabled={!s.usable}>

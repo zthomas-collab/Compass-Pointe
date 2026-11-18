@@ -67,7 +67,7 @@ export default async function ProjectEditorPage({
     if (!(err instanceof AppError && err.code === "FORBIDDEN")) throw err;
   }
   const editing = project.canEdit && EDITABLE.includes(project.status);
-  const sites = editing ? await listProjectSites(db, user.id, project.orgId) : [];
+  const sites = editing ? await listProjectSites(db, user.id, project.orgId, project.siteId) : [];
   const s = project.status;
   const act = (to: ProjectStatus) => setProjectStatusAction.bind(null, project.id, to);
   return (

@@ -102,6 +102,30 @@ describe("projects follow their site", () => {
   });
 });
 
+describe("projects whose site was archived", () => {
+  it("cannot be submitted until a new location is chosen", async () => {
+    const gone = await createSite(db, editor, orgA, site({ name: "[TEST] Soon Archived Hub", postalCode: "28778" }));
+    const id = await createProject(db, editor, orgA, input(gone, { title: "Project at a site about to close" }));
+    await addNeed(db, editor, id, { title: "Helpers", slotsNeeded: 2 });
+    await archiveSite(db, editor, gone);
+    await expect(submitProject(db, editor, id)).rejects.toMatchObject({ code: "VALIDATION", fieldErrors: { siteId: expect.anything() } });
+  });
+
+  it("listProjectSites includes the project's own archived site, unusable with a reason, so the form never moves it silently", async () => {
+    const gone = await createSite(db, editor, orgA, site({ name: "[TEST] Closed Hub", postalCode: "28778" }));
+    await archiveSite(db, editor, gone);
+    expect((await listProjectSites(db, editor, orgA)).map((s) => s.id)).not.toContain(gone);
+    const withCurrent = await listProjectSites(db, editor, orgA, gone);
+    expect(withCurrent.find((s) => s.id === gone)).toMatchObject({
+      name: "[TEST] Closed Hub", usable: false, reason: "This location was archived — choose another",
+    });
+  });
+
+  it("listProjectSites ignores an includeSiteId from another organization", async () => {
+    expect((await listProjectSites(db, editor, orgA, siteOther)).map((s) => s.id)).not.toContain(siteOther);
+  });
+});
+
 describe("legacy projects without a site", () => {
   it("must choose a location before they can be submitted", async () => {
     const id = await createProject(db, editor, orgA, input(siteA, { title: "Legacy project without a site" }));

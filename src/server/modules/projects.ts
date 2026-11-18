@@ -102,21 +102,28 @@ export type ProjectSiteOption = {
   id: string; name: string; city: string | null; zip: string | null; countyName: string | null; usable: boolean; reason: string | null;
 };
 
-/** Org members: the organization's active sites a project can start at, each marked usable or not with the reason. */
-export async function listProjectSites(driver: Driver, userId: string, orgId: string): Promise<ProjectSiteOption[]> {
+const ARCHIVED = "This location was archived — choose another";
+
+/**
+ * Org members: the organization's active sites a project can start at, each marked usable or not with the reason.
+ * `includeSiteId` (a project's current site) is always listed, even when archived, so an edit form can show it and
+ * require a deliberate choice instead of silently falling back to another location. Ignored for another org's site.
+ */
+export async function listProjectSites(driver: Driver, userId: string, orgId: string, includeSiteId?: string | null): Promise<ProjectSiteOption[]> {
   const org = uuid(orgId);
   return runIn(driver, { kind: "system" }, async (tx) => {
     if (!(await membershipRole(tx, org, userId))) throw new AppError("FORBIDDEN", "You are not a member of this organization.");
-    const rows = await tx.query<{ id: string; name: string; city: string | null; zip: string | null; county_name: string | null; served: boolean }>(
-      `SELECT s.id, s.name, s.city, left(s.postal_code, 5) AS zip, c.name AS county_name,
+    const include = includeSiteId && z.string().uuid().safeParse(includeSiteId).success ? includeSiteId : null;
+    const rows = await tx.query<{ id: string; name: string; city: string | null; zip: string | null; county_name: string | null; served: boolean; active: boolean }>(
+      `SELECT s.id, s.name, s.city, left(s.postal_code, 5) AS zip, c.name AS county_name, s.status = 'ACTIVE' AS active,
               EXISTS (SELECT 1 FROM organization_counties oc WHERE oc.org_id = s.org_id AND oc.county_id = s.county_id) AS served
          FROM staging_sites s LEFT JOIN counties c ON c.id = s.county_id
-        WHERE s.org_id = $1 AND s.status = 'ACTIVE'
+        WHERE s.org_id = $1 AND (s.status = 'ACTIVE' OR s.id = $2::uuid)
         ORDER BY s.name, s.id`,
-      [org],
+      [org, include],
     );
     return rows.map((r) => {
-      const reason = !r.county_name || !r.zip ? NOT_COVERED : !r.served ? NOT_SERVED : null;
+      const reason = !r.active ? ARCHIVED : !r.county_name || !r.zip ? NOT_COVERED : !r.served ? NOT_SERVED : null;
       return { id: r.id, name: r.name, city: r.city, zip: r.zip, countyName: r.county_name, usable: reason === null, reason };
     });
   });
@@ -414,6 +421,8 @@ export async function submitProject(driver: Driver, userId: string, id: string):
       if (n[0].n < 1) throw new AppError("VALIDATION", "Add at least one need before submitting for review.");
       const pinned = await tx.query<{ site_id: string | null }>(`SELECT site_id FROM projects WHERE id = $1`, [projectId]);
       if (!pinned[0].site_id) throw new AppError("VALIDATION", "Choose a location for this project");
+      // The location may have been archived, or left a covered county, since the project was saved.
+      await resolveProjectSite(tx, p.org_id, pinned[0].site_id);
       await tx.query(`UPDATE projects SET status = 'PENDING_REVIEW', review_note = NULL WHERE id = $1`, [projectId]);
       await writeAudit(tx, {
         actorUserId: userId, actorOrgId: p.org_id, action: "PROJECT_SUBMITTED", subjectType: "project", subjectId: projectId,
