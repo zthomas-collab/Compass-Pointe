@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { GiveMoneySection } from "@/components/give-card";
 import { VolunteerSectionNav } from "@/components/volunteer-nav";
 import { OFFER_TYPE_INFO, OFFER_TYPE_LABELS, type OfferType } from "@/lib/offers";
 import { VOLUNTEER_PATHS, donatePath, shiftPath } from "@/lib/volunteer-paths";
 import { getDriver } from "@/server/db";
+import { listGiveMoneyOrgs } from "@/server/modules/giving";
 import { searchProjects } from "@/server/modules/projects";
 
 export const metadata: Metadata = { title: "Volunteer & donate" };
@@ -23,7 +25,8 @@ const STEPS = [
  * shifts page uses), and an empty state always offers another way to help.
  */
 export default async function VolunteerHubPage() {
-  const { projects } = await searchProjects(await getDriver(), {});
+  const db = await getDriver();
+  const [{ projects }, moneyOrgs] = await Promise.all([searchProjects(db, {}), listGiveMoneyOrgs(db)]);
   const urgent = projects.slice(0, 3); // The search puts projects with an urgent need first.
   return (
     <>
@@ -32,7 +35,8 @@ export default async function VolunteerHubPage() {
         <header className="max-w-2xl">
           <h1 className="text-3xl sm:text-4xl">How do you want to help?</h1>
           <p className="mt-2 text-muted">
-            Real needs, posted by approved organizations in your community. Choose a path and we will walk you through it.
+            Real needs, posted by approved organizations in your community. Volunteer your time, offer supplies, or{" "}
+            {moneyOrgs.length > 0 ? <a className="underline" href="#give-money">give money</a> : "give money"} directly to an organization.
           </p>
         </header>
 
@@ -110,6 +114,10 @@ export default async function VolunteerHubPage() {
               <Link className="btn btn-primary" href={VOLUNTEER_PATHS.donate}>See everything you can give</Link>
             </p>
           </section>
+        </div>
+
+        <div className="mt-5">
+          <GiveMoneySection orgs={moneyOrgs} limit={4} moreHref={`${VOLUNTEER_PATHS.donate}#give-money`} />
         </div>
 
         <p className="mt-5 text-sm">

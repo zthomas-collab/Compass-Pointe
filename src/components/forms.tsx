@@ -44,12 +44,12 @@ export function Field(props: { label: string; name: string; state: FormState; hi
   );
 }
 
-export function SignInForm({ action }: { action: Action }) {
+export function SignInForm({ action, emailLabel = "Work email" }: { action: Action; emailLabel?: string }) {
   const [state, formAction] = useActionState(action, {});
   return (
     <form action={formAction} className="grid gap-4">
       <FormMessage state={state} />
-      <Field label="Work email" name="email" type="email" state={state} required autoComplete="email" />
+      <Field label={emailLabel} name="email" type="email" state={state} required autoComplete="email" />
       <SubmitButton>Email me a sign-in link</SubmitButton>
     </form>
   );

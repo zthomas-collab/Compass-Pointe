@@ -93,3 +93,22 @@ export async function getGiveTarget(driver: Driver, orgId: unknown): Promise<Giv
   if (!r || r.accepted_offer_types.length === 0) return null;
   return { orgId: r.id, displayName: r.display_name, acceptedOfferTypes: r.accepted_offer_types, donationUrl: r.donation_url };
 }
+
+export type GiveMoneyOrg = { orgId: string; displayName: string; donationUrl: string; host: string; countiesServed: string[] };
+
+/**
+ * Organizations a visitor can give money to: a public profile and an administrator-approved donation link
+ * (public_contacts only exposes the link while APPROVED). Money is given on the organization's own site;
+ * the platform never handles it.
+ */
+export async function listGiveMoneyOrgs(driver: Driver): Promise<GiveMoneyOrg[]> {
+  const rows = await runIn(driver, { kind: "anon" }, (tx) =>
+    tx.query<{ id: string; display_name: string; donation_url: string; counties_served: string[] }>(
+      `SELECT id, display_name, donation_url, counties_served FROM public_contacts
+        WHERE donation_url IS NOT NULL ORDER BY display_name, id LIMIT 200`),
+  );
+  return rows.map((r) => ({
+    orgId: r.id, displayName: r.display_name, donationUrl: r.donation_url, host: new URL(r.donation_url).hostname,
+    countiesServed: r.counties_served,
+  }));
+}
