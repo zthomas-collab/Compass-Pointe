@@ -7,6 +7,7 @@ import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
 
 import { HAZARD_TYPES } from "@/lib/events";
+import type { OfferType } from "@/lib/offers";
 export { HAZARD_TYPES };
 export type EventStatus = "DRAFT" | "ACTIVE" | "RECOVERY" | "CLOSED";
 
@@ -269,6 +270,14 @@ type DbHelpSite = {
 /** Strip a trailing " County" and compare case-insensitively: site county text is free-form. */
 const norm = (col: string) => `lower(btrim(regexp_replace(${col}, '[[:space:]]+county$', '', 'i')))`;
 
+/** Whether public site `ps` serves public event `pe`: its ZIP when the event is narrowed to ZIPs, else its county. */
+const SITE_IN_EVENT_AREA = `(
+  CASE WHEN cardinality(pe.zips) > 0
+       THEN ps.postal_code = ANY (pe.zips)
+       ELSE EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c
+                     WHERE c->>'state' = ps.state AND ${norm("c->>'name'")} = ${norm("ps.county")})
+  END)`;
+
 /**
  * Public: sites that serve an event's area. With ZIPs set, a site matches on its ZIP; otherwise on county
  * (same state, name tolerant of a "County" suffix). Reads only public views, so private data cannot leak,
@@ -283,12 +292,7 @@ export async function getEventHelp(driver: Driver, eventId: string): Promise<Eve
                                                           'reportedStatus', r.reported_status, 'freshness', r.freshness) ORDER BY r.name)
                           FROM public_resources r WHERE r.site_id = ps.id), '[]'::json) AS resources
          FROM public_events pe
-         JOIN public_sites ps ON (
-              CASE WHEN cardinality(pe.zips) > 0
-                   THEN ps.postal_code = ANY (pe.zips)
-                   ELSE EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c
-                                 WHERE c->>'state' = ps.state AND ${norm("c->>'name'")} = ${norm("ps.county")})
-              END)
+         JOIN public_sites ps ON ${SITE_IN_EVENT_AREA}
         WHERE pe.id = $1
         ORDER BY ps.name, ps.id`,
       [eventId],
@@ -297,5 +301,44 @@ export async function getEventHelp(driver: Driver, eventId: string): Promise<Eve
   return rows.map((r) => ({
     siteId: r.site_id, siteName: r.site_name, orgName: r.org_name, city: r.city, postalCode: r.postal_code,
     hoursText: r.hours_text, resources: r.resources,
+  }));
+}
+
+export type EventHelper = {
+  orgId: string; displayName: string; countiesServed: string[]; acceptedOfferTypes: OfferType[]; donationUrl: string | null;
+  openSpots: number; hasUrgent: boolean;
+};
+
+/**
+ * Public: "Who's helping" for an open (ACTIVE or RECOVERY) event. Organizations with a public profile that either have
+ * a project linked to the event or a public site inside its area. Reads only public views, so a hidden, suspended or
+ * unconsented organization never appears. Organizations with urgent volunteer roles come first.
+ */
+export async function listEventHelpers(driver: Driver, eventId: string): Promise<EventHelper[]> {
+  if (!z.string().uuid().safeParse(eventId).success) return [];
+  const rows = await runIn(driver, { kind: "anon" }, (tx) =>
+    tx.query<{
+      id: string; display_name: string; counties_served: string[]; accepted_offer_types: OfferType[]; donation_url: string | null;
+      open_spots: number; has_urgent: boolean;
+    }>(
+      `WITH ev AS (SELECT * FROM public_events WHERE id = $1 AND status IN ('ACTIVE','RECOVERY')),
+            linked AS (SELECT p.* FROM ev JOIN public_event_links l ON l.event_id = ev.id JOIN public_projects p ON p.id = l.project_id),
+            helper_ids AS (
+              SELECT org_id FROM linked
+              UNION
+              SELECT ps.org_id FROM ev pe JOIN public_sites ps ON ${SITE_IN_EVENT_AREA})
+       SELECT c.id, c.display_name, c.counties_served, c.accepted_offer_types, c.donation_url,
+              coalesce((SELECT sum(greatest(n.slots_needed - n.slots_taken, 0))::int
+                          FROM linked lp JOIN public_project_needs n ON n.project_id = lp.id
+                         WHERE lp.org_id = c.id AND (n.ends_at IS NULL OR n.ends_at > now())), 0) AS open_spots,
+              EXISTS (SELECT 1 FROM linked lp WHERE lp.org_id = c.id AND lp.has_urgent) AS has_urgent
+         FROM public_contacts c JOIN helper_ids h ON h.org_id = c.id
+        ORDER BY has_urgent DESC, c.display_name, c.id`,
+      [eventId],
+    ),
+  );
+  return rows.map((r) => ({
+    orgId: r.id, displayName: r.display_name, countiesServed: r.counties_served, acceptedOfferTypes: r.accepted_offer_types,
+    donationUrl: r.donation_url, openSpots: r.open_spots, hasUrgent: r.has_urgent,
   }));
 }
