@@ -262,28 +262,40 @@ export async function listOffers(driver: Driver, userId: string, raw: unknown = 
 export async function getOffer(driver: Driver, userId: string, id: string): Promise<OfferDetail> {
   if (!uuid.safeParse(id).success) throw new AppError("NOT_FOUND", "Offer not found.");
   const staff = await runIn(driver, { kind: "system" }, (tx) => assertStaff(tx, userId));
-  const d = await runIn(driver, { kind: "viewer", userId }, async (tx) => {
-    const r = await tx.query<Record<string, unknown>>(
-      `SELECT ${SELECT}, o.email, o.phone, o.description, o.available_from::text AS available_from, o.available_until::text AS available_until,
-              o.delivery_notes, o.preferred_project, o.consent_share, o.county_id FROM ${FROM} WHERE o.id = $1`, [id]);
-    if (!r.length) return null;
-    const ev = await tx.query<Record<string, unknown>>(
-      `SELECT id, event_type, from_status, to_status, note, actor_role, created_at FROM contribution_offer_events WHERE offer_id = $1 ORDER BY created_at, id`, [id]);
-    return { r: r[0], ev };
-  });
+  const d = await runIn(driver, { kind: "viewer", userId }, (tx) => readOfferDetail(tx, id));
   if (!d) throw new AppError("NOT_FOUND", "Offer not found.");
   await runIn(driver, { kind: "system" }, (tx) => writeAudit(tx, { actorUserId: userId, action: "OFFER_VIEWED", subjectType: "contribution_offer", subjectId: id }));
-  const s = toSummary(d.r);
   return {
-    ...s, email: d.r.email as string, phone: (d.r.phone as string | null) ?? null, description: d.r.description as string,
-    availableFrom: (d.r.available_from as string | null) ?? null, availableUntil: (d.r.available_until as string | null) ?? null,
-    deliveryNotes: (d.r.delivery_notes as string | null) ?? null, preferredProject: (d.r.preferred_project as string | null) ?? null,
-    consentShare: d.r.consent_share as boolean, countyId: (d.r.county_id as string | null) ?? null,
-    events: d.ev.map((e) => ({ id: e.id as string, type: e.event_type as string, fromStatus: e.from_status as string | null,
-      toStatus: e.to_status as string | null, note: e.note as string | null, actorRole: e.actor_role as string, at: e.created_at as Date })),
-    allowedNext: nextStaffOfferStatuses(s.status, s.recipientOrgId !== null),
-    canAssignCounty: staff.executive && d.r.county_id === null,
+    ...d, allowedNext: nextStaffOfferStatuses(d.status, d.recipientOrgId !== null), canAssignCounty: staff.executive && d.countyId === null,
   };
+}
+
+/** One offer with contact details and history, read in the caller's context (RLS decides whether it is visible). */
+export async function readOfferDetail(tx: Tx, id: string): Promise<Omit<OfferDetail, "allowedNext" | "canAssignCounty"> | null> {
+  const r = await tx.query<Record<string, unknown>>(
+    `SELECT ${SELECT}, o.email, o.phone, o.description, o.available_from::text AS available_from, o.available_until::text AS available_until,
+            o.delivery_notes, o.preferred_project, o.consent_share, o.county_id FROM ${FROM} WHERE o.id = $1`, [id]);
+  if (!r.length) return null;
+  const ev = await tx.query<Record<string, unknown>>(
+    `SELECT id, event_type, from_status, to_status, note, actor_role, created_at FROM contribution_offer_events WHERE offer_id = $1 ORDER BY created_at, id`, [id]);
+  const row = r[0];
+  return {
+    ...toSummary(row), email: row.email as string, phone: (row.phone as string | null) ?? null, description: row.description as string,
+    availableFrom: (row.available_from as string | null) ?? null, availableUntil: (row.available_until as string | null) ?? null,
+    deliveryNotes: (row.delivery_notes as string | null) ?? null, preferredProject: (row.preferred_project as string | null) ?? null,
+    consentShare: row.consent_share as boolean, countyId: (row.county_id as string | null) ?? null,
+    events: ev.map((e) => ({ id: e.id as string, type: e.event_type as string, fromStatus: e.from_status as string | null,
+      toStatus: e.to_status as string | null, note: e.note as string | null, actorRole: e.actor_role as string, at: e.created_at as Date })),
+  };
+}
+
+/** Summary rows of the offers sent to one organization, read in the caller's context. Open offers first, then newest. */
+export async function readOrgOfferSummaries(tx: Tx, orgId: string, status: OfferStatus | null, page: number): Promise<OfferSummary[]> {
+  const rows = await tx.query<Record<string, unknown>>(
+    `SELECT ${SELECT} FROM ${FROM} WHERE o.organization_id = $1 AND ($2::text IS NULL OR o.status = $2)
+      ORDER BY (o.status IN ('MATCHED','ACCEPTED','SCHEDULED')) DESC, o.created_at DESC, o.id LIMIT $3 OFFSET $4`,
+    [orgId, status, OFFER_PAGE_SIZE + 1, (page - 1) * OFFER_PAGE_SIZE]);
+  return rows.map(toSummary);
 }
 
 export const offerTransitionSchema = z.object({
@@ -307,7 +319,7 @@ async function actorFor(tx: Tx, userId: string, offer: { county_id: string | nul
   throw new AppError("NOT_FOUND", "Offer not found."); // do not reveal that it exists
 }
 
-async function setActor(tx: Tx, id: string, role: string, note: string | null): Promise<void> {
+export async function setActor(tx: Tx, id: string, role: string, note: string | null): Promise<void> {
   await tx.query(`SELECT set_config('ics.actor_id', $1, true), set_config('ics.actor_role', $2, true), set_config('ics.event_note', $3, true)`, [id, role, note ?? ""]);
 }
 
