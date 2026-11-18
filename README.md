@@ -56,7 +56,7 @@ Open http://localhost:3000. Optional: load ZIP centroids for Contacts radius sea
 | [05-milestones-acceptance](docs/05-milestones-acceptance.md) | Phases, acceptance evidence, measured performance |
 | [06-threat-model](docs/06-threat-model.md) | Threats and controls |
 | [07-systems-audit](docs/07-systems-audit.md) | Readiness audit: public help-finding and nonprofit onboarding |
-| [08-brand-and-color](docs/08-brand-and-color.md) | Original HopeGrid brand, palette, status colors, map key, contrast (palette now configurable) |
+| [08-brand-and-color](docs/08-brand-and-color.md) | Crisis Compass Carolinas brand, palette, calls to action, status colors, map key, contrast |
 | [09-crisis-compass-upgrade-plan](docs/09-crisis-compass-upgrade-plan.md) | Crisis Compass audit, role matrix, schema plan, phases, Phase 1 deployment |
 | [adr/](docs/adr/README.md) | Architecture decisions |
 | [sop/SOPs](docs/sop/SOPs.md) | Administrator procedures |

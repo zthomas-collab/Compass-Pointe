@@ -7,6 +7,7 @@ import { getCurrentUser, isPrivileged } from "@/server/session";
 import { privilegedMfaRequired } from "@/server/modules/organizations";
 import { signOutAction } from "./auth/actions";
 import { BrandLogo, BrandMark } from "@/components/brand";
+import { MobileMenu } from "@/components/mobile-menu";
 
 const serif = Cormorant_Garamond({ subsets: ["latin"], weight: ["500", "600", "700"], variable: "--font-serif-face", display: "swap" });
 const sans = Inter({ subsets: ["latin"], variable: "--font-sans-face", display: "swap" });
@@ -23,6 +24,37 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: brand.colors.primary };
 
 const navLink = "rounded-md px-2 py-2 text-sm font-semibold text-white hover:bg-white/10";
+
+/** The main navigation links, shared by the desktop bar and the phone Menu. Help comes first, then giving. */
+function MainLinks({ user, isAdmin, className }: { user: boolean; isAdmin: boolean; className: string }) {
+  return (
+    <>
+      <Link href="/" className={className}>Find help</Link>
+      <Link href="/assistance" className={className}>Request help</Link>
+      <Link href="/volunteer" className={className}>Volunteer &amp; donate</Link>
+      <Link href="/events" className={className}>Events</Link>
+      <Link href="/contacts" className={className}>Organizations</Link>
+      <Link href="/safety" className={className}>Safety</Link>
+      {user ? (
+        <>
+          <Link href="/dashboard" className={className}>Dashboard</Link>
+          <Link href="/account/security" className={className}>Security</Link>
+          {isAdmin && <Link href="/admin" className={className}>Admin</Link>}
+          <form action={signOutAction}>
+            <button className={`${className} w-full text-left underline`}>Sign out</button>
+          </form>
+        </>
+      ) : (
+        <>
+          <Link href="/signin" className={className}>Sign in</Link>
+          <Link href="/signin?tab=register" className="btn btn-attention min-h-10 px-3 py-1.5 text-sm md:ml-1">
+            Register Your Organization
+          </Link>
+        </>
+      )}
+    </>
+  );
+}
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
@@ -52,7 +84,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <div className="mr-auto py-1">
               {brand.logoPath ? (
                 <Link href="/" className="block rounded-md bg-white px-3 py-1.5 shadow-sm" aria-label={`${brand.name} home`}>
-                  <BrandLogo src={brand.logoPath} size={brand.logoSize} name={brand.name} tagline={brand.tagline} className="h-10 sm:h-12" />
+                  <BrandLogo src={brand.logoPath} size={brand.logoSize} name={brand.name} tagline={brand.tagline} className="h-12 lg:h-14" />
                 </Link>
               ) : (
                 <Link href="/" className="flex items-center gap-2 text-xl font-bold tracking-tight text-white" aria-label={`${brand.name} home`}>
@@ -61,29 +93,16 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 </Link>
               )}
             </div>
-            <Link href="/" className={navLink}>Map</Link>
-            <Link href="/contacts" className={navLink}>Contacts</Link>
-            <Link href="/events" className={navLink}>Events</Link>
-            <Link href="/assistance" className={navLink}>Request help</Link>
-            <Link href="/volunteer" className={navLink}>Volunteer &amp; donate</Link>
-            <Link href="/safety" className={navLink}>Safety</Link>
-            {user ? (
-              <>
-                <Link href="/dashboard" className={navLink}>Dashboard</Link>
-                <Link href="/account/security" className={navLink}>Security</Link>
-                {isAdmin && <Link href="/admin" className={navLink}>Admin</Link>}
-                <form action={signOutAction}>
-                  <button className={`${navLink} underline`}>Sign out</button>
-                </form>
-              </>
-            ) : (
-              <>
-                <Link href="/signin" className={navLink}>Sign in</Link>
-                <Link href="/signin?tab=register" className="btn btn-attention ml-1 min-h-10 px-3 py-1.5 text-sm">
-                  Register Your Organization
-                </Link>
-              </>
-            )}
+            <div className="hidden flex-wrap items-center gap-x-1 gap-y-1 md:flex">
+              <MainLinks user={Boolean(user)} isAdmin={Boolean(isAdmin)} className={navLink} />
+            </div>
+            {/* Phones: one compact Menu button so the search and "Find Help Near Me" stay near the top. Works without JavaScript. */}
+            <MobileMenu
+              summaryClassName={`${navLink} flex min-h-11 cursor-pointer list-none items-center gap-2 border border-white/40 px-3 [&::-webkit-details-marker]:hidden`}
+              panelClassName="absolute right-0 z-50 mt-2 grid w-64 gap-1 rounded-lg border border-line bg-brand p-2 shadow-lg"
+            >
+              <MainLinks user={Boolean(user)} isAdmin={Boolean(isAdmin)} className={`${navLink} block min-h-11 py-2.5 text-base`} />
+            </MobileMenu>
           </nav>
         </header>
         <main id="main" className="flex flex-1 flex-col">{children}</main>

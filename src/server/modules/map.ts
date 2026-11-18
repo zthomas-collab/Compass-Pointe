@@ -49,6 +49,10 @@ export type MapSite = {
   updatedAt: string; isSynthetic: boolean; resources: MapResource[];
   serviceType: string | null; serviceLabel: string | null; serviceShort: string | null; serviceColor: string | null;
   imageId: string | null; imageAlt: string | null;
+  /** The operating organization's administrator-approved donation link, or null. */
+  orgDonationUrl: string | null;
+  /** Whether the operating organization has a public profile page (/orgs/<id>). */
+  orgHasProfile: boolean;
 };
 
 export type MapResult = { asOf: string; truncated: boolean; scope: "public" | "authenticated"; sites: MapSite[] };
@@ -86,6 +90,7 @@ function toSite(r: Record<string, unknown>, resources: MapResource[]): MapSite {
     serviceType: (r.service_type as string | null) ?? null, serviceLabel: (r.service_label as string | null) ?? null,
     serviceShort: (r.service_short as string | null) ?? null, serviceColor: (r.service_color as string | null) ?? null,
     imageId: (r.image_id as string | null) ?? null, imageAlt: (r.image_alt as string | null) ?? null,
+    orgDonationUrl: (r.org_donation_url as string | null) ?? null, orgHasProfile: Boolean(r.org_has_profile),
   };
 }
 
@@ -109,7 +114,9 @@ async function publicQuery(tx: Tx, q: MapQuery): Promise<MapResult> {
   const rows = await tx.query<Record<string, unknown>>(
     `SELECT id, org_id, org_name, name, description, lat, lng, address_line, city, county, state, postal_code,
             hours_text, public_phone, last_confirmed_at, updated_at, is_synthetic,
-            service_type, service_label, service_short, service_color, image_id, image_alt
+            service_type, service_label, service_short, service_color, image_id, image_alt,
+            (SELECT pc.donation_url FROM public_contacts pc WHERE pc.id = public_sites.org_id) AS org_donation_url,
+            EXISTS (SELECT 1 FROM public_contacts pc WHERE pc.id = public_sites.org_id) AS org_has_profile
        FROM public_sites
       WHERE location::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326)
         AND (cardinality($6::text[]) = 0 OR service_type = ANY($6::text[]))
@@ -139,7 +146,9 @@ async function viewerQuery(tx: Tx, q: MapQuery): Promise<MapResult> {
             s.state, s.postal_code, s.hours_text, s.public_phone, s.last_confirmed_at, s.updated_at,
             (s.is_synthetic OR o.is_synthetic) AS is_synthetic,
             o.primary_service_type AS service_type, st.label AS service_label, st.short_label AS service_short,
-            st.color AS service_color, img.id AS image_id, img.alt_text AS image_alt
+            st.color AS service_color, img.id AS image_id, img.alt_text AS image_alt,
+            (SELECT pc.donation_url FROM public_contacts pc WHERE pc.id = s.org_id) AS org_donation_url,
+            EXISTS (SELECT 1 FROM public_contacts pc WHERE pc.id = s.org_id) AS org_has_profile
        FROM staging_sites s
        JOIN organizations o ON o.id = s.org_id
        LEFT JOIN service_types st ON st.code = o.primary_service_type

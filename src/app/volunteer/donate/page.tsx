@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { DonateChooser } from "@/components/donate-chooser";
+import { GiveMoneySection } from "@/components/give-card";
 import { OfferForm } from "@/components/offer-forms";
 import { Breadcrumb, VolunteerSectionNav } from "@/components/volunteer-nav";
 import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS, donateViewForOrg } from "@/lib/offers";
 import { VOLUNTEER_PATHS, donatePath } from "@/lib/volunteer-paths";
 import { getDriver } from "@/server/db";
 import { listCounties } from "@/server/modules/counties";
-import { getGiveTarget } from "@/server/modules/giving";
+import { getGiveTarget, listGiveMoneyOrgs } from "@/server/modules/giving";
 import { submitOfferAction } from "../actions";
 
-export const metadata: Metadata = { title: "Donate supplies, equipment or space" };
+export const metadata: Metadata = { title: "Donate money, supplies, equipment or space" };
 export const dynamic = "force-dynamic";
 
 type Search = { type?: string | string[]; org?: string | string[] };
@@ -30,6 +31,7 @@ export default async function DonatePage({ searchParams }: { searchParams: Promi
   const donateHome = target ? donatePath(undefined, target.orgId) : VOLUNTEER_PATHS.donate;
 
   if (view.mode === "chooser") {
+    const moneyOrgs = target ? [] : await listGiveMoneyOrgs(db);
     return (
       <>
         <VolunteerSectionNav current="donate" />
@@ -46,7 +48,13 @@ export default async function DonatePage({ searchParams }: { searchParams: Promi
               ? `Choose what you can offer. ${target.displayName} receives your offer and contacts you to arrange it. You do not need an account.`
               : "Choose what you can offer. A short form follows. Coordinators review every offer and match it to a real need; you do not need an account, and sending an offer does not commit anyone to accept it."}
           </p>
+          {moneyOrgs.length > 0 && (
+            <p className="mt-3 text-sm">
+              Prefer to give money? <a className="underline" href="#give-money">See organizations taking donations</a>.
+            </p>
+          )}
           <DonateChooser allowedTypes={target?.acceptedOfferTypes} orgId={target?.orgId} />
+          {moneyOrgs.length > 0 && <div className="mt-8"><GiveMoneySection orgs={moneyOrgs} /></div>}
           {target?.donationUrl && (
             <p className="mt-6 text-sm">
               Prefer to give money?{" "}

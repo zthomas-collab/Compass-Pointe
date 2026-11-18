@@ -32,8 +32,8 @@ export default function SafetyPage() {
       <section className="mt-5">
         <h2 className="text-lg font-semibold">Report incorrect information</h2>
         <p className="mt-1">
-          The in-app correction form ships in a later phase (SOP-011). Until then, contact the listed organization
-          directly using the phone number on its listing.
+          If a listing is wrong (closed, out of stock, wrong address or hours), call the organization using the phone
+          number on its listing so it can update the information. An online correction form is coming soon.
         </p>
       </section>
     </div>

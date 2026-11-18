@@ -47,6 +47,8 @@ function boundsAround(lng: number, lat: number, d = 0.4): Bbox {
   return { w: lng - d, s: lat - d, e: lng + d, n: lat + d };
 }
 
+const KM_TO_MI = 0.621371;
+
 function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) {
   const r = Math.PI / 180;
   const x = (bLng - aLng) * r * Math.cos(((aLat + bLat) / 2) * r);
@@ -302,8 +304,13 @@ export default function ResourceMap({ categories, signedIn, serviceTypes }: { ca
   // ---- render ------------------------------------------------------------
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <h1 className="sr-only">Find help near you.</h1>
       <div className="border-b border-line bg-surface px-3 py-2">
+        <div className="mb-2">
+          <h1 className="text-xl font-semibold leading-tight sm:text-2xl">Find help near you</h1>
+          <p className="text-sm text-muted">
+            Food, water, shelter and recovery services from verified organizations. Free, and no account needed.
+          </p>
+        </div>
         <div className="flex flex-wrap gap-2">
           <form onSubmit={runSearch} role="search" className="flex min-w-[16rem] flex-1 gap-2">
             <label htmlFor="q" className="sr-only">Search by city, county, ZIP or address</label>
@@ -311,7 +318,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes }: { ca
             <button className="btn btn-primary" type="submit">Search</button>
           </form>
           <button type="button" className="btn btn-attention w-full whitespace-nowrap sm:w-auto" onClick={nearMe}>
-            <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden><path d="M8 1.5c-2.6 0-4.5 2-4.5 4.4 0 3.3 4.5 8.6 4.5 8.6s4.5-5.3 4.5-8.6C12.5 3.5 10.6 1.5 8 1.5z" fill="currentColor" /><circle cx="8" cy="6" r="1.7" fill="#F0B84B" /></svg>
+            <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden><path d="M8 1.5c-2.6 0-4.5 2-4.5 4.4 0 3.3 4.5 8.6 4.5 8.6s4.5-5.3 4.5-8.6C12.5 3.5 10.6 1.5 8 1.5z" fill="currentColor" /><circle cx="8" cy="6" r="1.7" fill="var(--cc-accent)" /></svg>
             Find Help Near Me
           </button>
         </div>
@@ -417,7 +424,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes }: { ca
                     {s.isSynthetic && <span className="badge tone-warn">SYNTHETIC DEMO</span>}
                     {s.visibility !== "PUBLIC" && <span className="badge tone-warn">Restricted</span>}
                   </div>
-                  <div className="text-sm text-muted">{s.serviceLabel ? <span className="sr-only">{s.serviceLabel}. </span> : null}{s.orgName} · {[s.city, s.state].filter(Boolean).join(", ")} · {distanceKm(center.lat, center.lng, s.lat, s.lng).toFixed(1)} km</div>
+                  <div className="text-sm text-muted">{s.serviceLabel ? <span className="sr-only">{s.serviceLabel}. </span> : null}{s.orgName} · {[s.city, s.state].filter(Boolean).join(", ")} · {(distanceKm(center.lat, center.lng, s.lat, s.lng) * KM_TO_MI).toFixed(1)} mi</div>
                   <div className="mt-1 flex flex-wrap gap-1">
                     {s.resources.slice(0, 4).map((r) => {
                       const d = displayAvailability(r.reportedStatus as AvailabilityStatus, r.freshness as Freshness);
@@ -462,7 +469,13 @@ function SiteDetail({ site, stale, onClose }: { site: MapSite; stale: boolean; o
           {site.serviceLabel}
         </p>
       )}
-      <p className="mt-1 text-sm">Operated by <strong>{site.orgName}</strong> <span className="badge tone-ok">Verified organization</span></p>
+      <p className="mt-1 text-sm">
+        Operated by{" "}
+        {site.orgHasProfile
+          ? <a className="font-semibold underline" href={`/orgs/${site.orgId}`}>{site.orgName}</a>
+          : <strong>{site.orgName}</strong>}{" "}
+        <span className="badge tone-ok">Verified organization</span>
+      </p>
       {(site.addressLine || site.city) && (
         <p className="mt-1 text-sm">{[site.addressLine, site.city, site.state, site.postalCode].filter(Boolean).join(", ")}</p>
       )}
@@ -496,6 +509,19 @@ function SiteDetail({ site, stale, onClose }: { site: MapSite; stale: boolean; o
         {site.resources.length === 0 && <li className="py-2 text-sm text-muted">No resources listed.</li>}
       </ul>
       <p className="mt-3 text-xs text-muted">Call ahead before traveling. Availability is reported by the organization and can change quickly.</p>
+      {(site.orgDonationUrl || site.orgHasProfile) && (
+        <div className="mt-4 border-t border-line pt-3">
+          <h3 className="font-semibold">Want to support {site.orgName}?</h3>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {site.orgDonationUrl && (
+              <a className="btn btn-secondary" href={site.orgDonationUrl} target="_blank" rel="noopener noreferrer nofollow">
+                Give money <span aria-hidden="true">↗</span><span className="sr-only"> to {site.orgName} on their own website (opens in a new tab)</span>
+              </a>
+            )}
+            {site.orgHasProfile && <a className="btn btn-secondary" href={`/orgs/${site.orgId}`}>Other ways to help</a>}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
