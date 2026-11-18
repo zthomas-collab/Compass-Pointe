@@ -170,12 +170,15 @@ async function seedDemoDisaster(db: Driver, ids: { pantryEditor: string; pantry:
     return ev;
   });
 
-  // An urgent volunteer project, approved and linked to the event, so "Who's helping" shows open spots.
+  // An urgent volunteer project at the pantry's public site, approved and linked to the event, so "Who's helping" shows
+  // open spots and the map shows it at that site.
   const county = await sys((tx) => tx.query<{ id: string }>(`SELECT id FROM counties WHERE state = 'NC' AND name = 'Buncombe'`)).then((r) => r[0].id);
+  const pantrySite = await sys((tx) => tx.query<{ id: string }>(
+    `SELECT id FROM staging_sites WHERE org_id = $1 AND name LIKE '%Downtown Food Distribution'`, [ids.pantry])).then((r) => r[0].id);
   const project = await createProject(db, ids.pantryEditor, ids.pantry, {
     title: "[SYNTHETIC] Food box packing after the storm",
     description: "Synthetic demo project. Volunteers pack and hand out food boxes for families affected by the storm.",
-    countyId: county, zip: "28801", audience: "COMMUNITY", privateLocationNotes: "Synthetic: loading dock behind the pantry",
+    siteId: pantrySite, audience: "COMMUNITY", privateLocationNotes: "Synthetic: loading dock behind the pantry",
   });
   await addNeed(db, ids.pantryEditor, project, { title: "Box packers", slotsNeeded: 12, urgency: "URGENT" });
   await addNeed(db, ids.pantryEditor, project, { title: "Delivery drivers", slotsNeeded: 4 });

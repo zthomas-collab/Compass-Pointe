@@ -3,22 +3,28 @@
 import { useActionState } from "react";
 import type { FormState } from "@/app/auth/actions";
 import { PROJECT_AUDIENCES, PROJECT_AUDIENCE_LABELS, isoToEasternLocal } from "@/lib/projects";
-import type { County } from "@/server/modules/counties";
-import type { NeedRow, ProjectRow } from "@/server/modules/projects";
+import type { NeedRow, ProjectRow, ProjectSiteOption } from "@/server/modules/projects";
 import { Field, FieldError, FormMessage, SubmitButton } from "./forms";
 
 type Action = (prev: FormState, form: FormData) => Promise<FormState>;
 
 export function ProjectForm({
   action,
-  counties,
+  sites,
+  newSiteHref,
   project,
 }: {
   action: Action;
-  counties: Pick<County, "id" | "name" | "state">[];
+  /** The organization's locations; the project's county and ZIP come from the one chosen. */
+  sites: ProjectSiteOption[];
+  newSiteHref: string;
   project?: ProjectRow;
 }) {
   const [state, formAction] = useActionState(action, {});
+  // A project whose location can no longer be used starts with no location chosen, so the browser never quietly
+  // selects another one; the editor is told why and must pick.
+  const current = project?.siteId ? sites.find((s) => s.id === project.siteId) : undefined;
+  const currentUsable = current?.usable ?? false;
   return (
     <form action={formAction} className="grid gap-3 sm:grid-cols-2">
       <div className="sm:col-span-2"><FormMessage state={state} /></div>
@@ -31,17 +37,29 @@ export function ProjectForm({
         <textarea className="input min-h-28" name="description" required minLength={10} maxLength={4000} defaultValue={project?.description} />
         <FieldError state={state} name="description" />
       </label>
-      <label className="field">
-        <span>County</span>
-        <select className="input" name="countyId" required defaultValue={project?.countyId ?? ""}>
-          <option value="" disabled>Choose a county…</option>
-          {counties.map((c) => <option key={c.id} value={c.id}>{c.name}, {c.state}</option>)}
+      <label className="field sm:col-span-2">
+        <span>Location</span>
+        {project && !currentUsable && (
+          <small className="text-bad" role="status">
+            {current ? `This project's location, ${current.name}, can't be used: ${current.reason}.` : "This project has no location yet."}{" "}
+            Choose a location below.
+          </small>
+        )}
+        <select className="input" name="siteId" required defaultValue={currentUsable ? project!.siteId! : ""}>
+          <option value="" disabled>Choose one of your locations…</option>
+          {sites.map((s) => (
+            <option key={s.id} value={s.id} disabled={!s.usable}>
+              {s.name}{s.city ? ` · ${s.city}` : ""}{s.zip ? ` ${s.zip}` : ""}{s.countyName ? ` (${s.countyName} County)` : ""}
+              {s.reason ? ` — ${s.reason}` : ""}
+            </option>
+          ))}
         </select>
-        <small className="text-muted">Only counties your organization profile lists as served.</small>
-        <FieldError state={state} name="countyId" />
+        <small className="text-muted">
+          The project shows on the map at this location, and its county and ZIP decide which disaster events it is
+          suggested for. <a className="underline" href={newSiteHref}>Add a new location</a>
+        </small>
+        <FieldError state={state} name="siteId" />
       </label>
-      <Field label="ZIP code" name="zip" state={state} required inputMode="numeric" maxLength={5} defaultValue={project?.zip} placeholder="28801"
-        hint="The public sees only the ZIP and county, never the exact address." />
       <label className="field sm:col-span-2">
         <span>Who is this for?</span>
         <select className="input" name="audience" required defaultValue={project?.audience ?? ""}>

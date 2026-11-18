@@ -56,14 +56,18 @@ function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) {
   return Math.sqrt(x * x + y * y) * 6371;
 }
 
-export default function ResourceMap({ categories, signedIn, serviceTypes }: { categories: Category[]; signedIn: boolean; serviceTypes: ServiceType[] }) {
+export default function ResourceMap({ categories, signedIn, serviceTypes, initialSite = null }: {
+  categories: Category[]; signedIn: boolean; serviceTypes: ServiceType[];
+  /** Open the map on this public site (from /?site=<id>, e.g. a project's "See it on the map" link). */
+  initialSite?: { id: string; lat: number; lng: number } | null;
+}) {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [mapFailed, setMapFailed] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [bbox, setBbox] = useState<Bbox>(boundsAround(DEF_LNG, DEF_LAT));
-  const [center, setCenter] = useState({ lat: DEF_LAT, lng: DEF_LNG });
+  const [center, setCenter] = useState(initialSite ? { lat: initialSite.lat, lng: initialSite.lng } : { lat: DEF_LAT, lng: DEF_LNG });
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [confirmedOnly, setConfirmedOnly] = useState(false);
@@ -71,7 +75,9 @@ export default function ResourceMap({ categories, signedIn, serviceTypes }: { ca
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSite?.id ?? null);
+  // The map is created once; read the starting site from a ref so later prop changes do not rebuild it.
+  const initialSiteRef = useRef(initialSite);
   const [view, setView] = useState<"map" | "list">("map");
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<PlaceHit[] | null>(null);
@@ -139,8 +145,8 @@ export default function ResourceMap({ categories, signedIn, serviceTypes }: { ca
         const map = new maplibregl.Map({
           container: mapEl.current,
           style: STYLE_URL,
-          center: [DEF_LNG, DEF_LAT],
-          zoom: DEF_ZOOM,
+          center: initialSiteRef.current ? [initialSiteRef.current.lng, initialSiteRef.current.lat] : [DEF_LNG, DEF_LAT],
+          zoom: initialSiteRef.current ? 14 : DEF_ZOOM,
           attributionControl: { compact: true },
         });
         mapRef.current = map;
@@ -423,6 +429,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes }: { ca
                     <span className="font-semibold">{s.name}</span>
                     {s.isSynthetic && <span className="badge tone-warn">SYNTHETIC DEMO</span>}
                     {s.visibility !== "PUBLIC" && <span className="badge tone-warn">Restricted</span>}
+                    {s.projects.length > 0 && <span className="badge tone-brand">Volunteers needed</span>}
                   </div>
                   <div className="text-sm text-muted">{s.serviceLabel ? <span className="sr-only">{s.serviceLabel}. </span> : null}{s.orgName} · {[s.city, s.state].filter(Boolean).join(", ")} · {(distanceKm(center.lat, center.lng, s.lat, s.lng) * KM_TO_MI).toFixed(1)} mi</div>
                   <div className="mt-1 flex flex-wrap gap-1">
@@ -509,6 +516,20 @@ function SiteDetail({ site, stale, onClose }: { site: MapSite; stale: boolean; o
         {site.resources.length === 0 && <li className="py-2 text-sm text-muted">No resources listed.</li>}
       </ul>
       <p className="mt-3 text-xs text-muted">Call ahead before traveling. Availability is reported by the organization and can change quickly.</p>
+      {site.projects.length > 0 && (
+        <div className="mt-4 border-t border-line pt-3">
+          <h3 className="font-semibold">Volunteers needed here</h3>
+          <ul className="mt-1 divide-y divide-line">
+            {site.projects.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center gap-2 py-2">
+                <a className="font-medium text-brand underline" href={`/volunteer/projects/${p.id}`}>{p.title}</a>
+                {p.hasUrgent && <span className="badge tone-bad"><span aria-hidden="true">!</span> Urgent</span>}
+                <span className="text-sm text-muted">{p.spotsLeft > 0 ? `${p.spotsLeft} ${p.spotsLeft === 1 ? "spot" : "spots"} left` : "Full"}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {(site.orgDonationUrl || site.orgHasProfile) && (
         <div className="mt-4 border-t border-line pt-3">
           <h3 className="font-semibold">Want to support {site.orgName}?</h3>

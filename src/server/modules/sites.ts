@@ -136,9 +136,9 @@ export async function createSite(driver: Driver, userId: string, orgId: string, 
       await assertCanEdit(tx, orgId);
       const rows = await tx.query<{ id: string }>(
         `INSERT INTO staging_sites (org_id, name, description, visibility, location, address_line, city, county, state,
-                                    postal_code, hours_text, public_phone, last_confirmed_at, created_by, updated_by)
+                                    postal_code, hours_text, public_phone, last_confirmed_at, created_by, updated_by, county_id)
          VALUES ($1, $2, $3, $4::visibility_level, ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, $7, $8, $9, $10,
-                 $11, $12, $13, now(), ics.viewer_id(), ics.viewer_id())
+                 $11, $12, $13, now(), ics.viewer_id(), ics.viewer_id(), ics.county_for_zip($11))
          RETURNING id`,
         [
           orgId, input.name, input.description, input.visibility, input.lng, input.lat, input.addressLine,
@@ -164,7 +164,7 @@ export async function updateSite(driver: Driver, userId: string, siteId: string,
         `UPDATE staging_sites SET name = $2, description = $3, visibility = $4::visibility_level,
                 location = ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, address_line = $7, city = $8,
                 county = $9, state = $10, postal_code = $11, hours_text = $12, public_phone = $13,
-                last_confirmed_at = now(), updated_by = ics.viewer_id()
+                county_id = ics.county_for_zip($11), last_confirmed_at = now(), updated_by = ics.viewer_id()
           WHERE id = $1 RETURNING id`,
         [
           siteId, input.name, input.description, input.visibility, input.lng, input.lat, input.addressLine,

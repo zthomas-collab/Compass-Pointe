@@ -5,7 +5,8 @@ import { assignCountyAdmin, createCounty } from "@/server/modules/counties";
 import { createEvent, setEventStatus, updateEvent } from "@/server/modules/events";
 import { confirmCommitment, signUpForNeed } from "@/server/modules/volunteers";
 import { linkProjectToEvent, listEventProjects, listLinkableEvents, listProjectEventLinks, listPublicProjectEvents, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
-import { addNeed, createProject, reviewProject, setProjectStatus, submitProject, updateProject } from "@/server/modules/projects";
+import { addNeed, reviewProject, setProjectStatus, submitProject } from "@/server/modules/projects";
+import { createProjectAtZip as createProject, updateProjectAtZip as updateProject } from "./helpers/fixtures";
 import { freshDb } from "./helpers/db";
 import { grantRole, makeOrg, makeUser } from "./helpers/fixtures";
 

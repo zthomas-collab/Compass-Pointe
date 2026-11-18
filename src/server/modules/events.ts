@@ -5,6 +5,7 @@ import { AppError, fromDbError } from "../errors";
 import { assertExecutive } from "./access";
 import { parseOrThrow } from "./identity";
 import { writeAudit } from "./shared";
+import { suggestForEvent } from "./suggestions";
 
 import { HAZARD_TYPES } from "@/lib/events";
 import type { OfferType } from "@/lib/offers";
@@ -200,6 +201,11 @@ export async function updateEvent(driver: Driver, actorId: string, id: string, r
       }
       for (const zip of input.zips) await tx.query(`INSERT INTO event_zips (event_id, zip) VALUES ($1, $2)`, [eventId, zip]);
       await writeAudit(tx, { actorUserId: actorId, action: "EVENT_UPDATED", subjectType: "event", subjectId: eventId, details: { slug } });
+      // The area may have grown: suggest the open projects now inside it (an active or recovering event only).
+      const suggested = await suggestForEvent(tx, eventId);
+      if (suggested > 0) {
+        await writeAudit(tx, { actorUserId: actorId, action: "EVENT_LINKS_SUGGESTED", subjectType: "event", subjectId: eventId, details: { count: suggested } });
+      }
     });
   } catch (err) {
     throw fromDbError(err);
@@ -226,6 +232,10 @@ export async function setEventStatus(driver: Driver, actorId: string, id: string
         actorUserId: actorId, action: "EVENT_STATUS_CHANGED", subjectType: "event", subjectId: eventId,
         details: { from: current.status, to: target },
       });
+      const suggested = target === "ACTIVE" || target === "RECOVERY" ? await suggestForEvent(tx, eventId) : 0;
+      if (suggested > 0) {
+        await writeAudit(tx, { actorUserId: actorId, action: "EVENT_LINKS_SUGGESTED", subjectType: "event", subjectId: eventId, details: { count: suggested } });
+      }
     });
   } catch (err) {
     throw fromDbError(err);
@@ -274,13 +284,16 @@ const norm = (col: string) => `lower(btrim(regexp_replace(${col}, '[[:space:]]+c
 const SITE_IN_EVENT_AREA = `(
   CASE WHEN cardinality(pe.zips) > 0
        THEN ps.postal_code = ANY (pe.zips)
+       WHEN ps.county_id IS NOT NULL
+       THEN EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c WHERE (c->>'id')::uuid = ps.county_id)
        ELSE EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c
                      WHERE c->>'state' = ps.state AND ${norm("c->>'name'")} = ${norm("ps.county")})
   END)`;
 
 /**
- * Public: sites that serve an event's area. With ZIPs set, a site matches on its ZIP; otherwise on county
- * (same state, name tolerant of a "County" suffix). Reads only public views, so private data cannot leak,
+ * Public: sites that serve an event's area. With ZIPs set, a site matches on its ZIP; otherwise on the county derived
+ * from its ZIP (migration 0018), or, when none could be derived, on its typed county name (same state, tolerant of a
+ * "County" suffix). Reads only public views, so private data cannot leak,
  * and a DRAFT event (absent from public_events) yields nothing.
  */
 export async function getEventHelp(driver: Driver, eventId: string): Promise<EventHelpSite[]> {

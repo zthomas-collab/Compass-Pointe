@@ -10,6 +10,8 @@ import {
   setProjectStatusAction,
   submitProjectAction,
   unlinkEventAction,
+  confirmSuggestionAction,
+  dismissSuggestionAction,
   updateNeedAction,
   updateProjectAction,
 } from "@/app/dashboard/projects/actions";
@@ -19,11 +21,9 @@ import { ActionButton, NeedForm, ProjectForm } from "@/components/project-forms"
 import { ProjectStatusBadge } from "@/components/project-status";
 import { PROJECT_AUDIENCE_LABELS, type ProjectStatus } from "@/lib/projects";
 import { getDriver } from "@/server/db";
-import { listCounties } from "@/server/modules/counties";
-import { getOrganizationProfile } from "@/server/modules/directory";
 import { AppError } from "@/server/errors";
-import { getProjectForEditor } from "@/server/modules/projects";
-import { listLinkableEvents, listProjectEventLinks } from "@/server/modules/eventlinks";
+import { getProjectForEditor, listProjectSites } from "@/server/modules/projects";
+import { listLinkableEvents, listProjectEventLinks, listSuggestions } from "@/server/modules/eventlinks";
 import { listRoster, type RosterRow } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 
@@ -57,7 +57,9 @@ export default async function ProjectEditorPage({
   const project = await getProjectForEditor(db, user.id, id);
   if (!project) notFound();
   // The roster holds volunteers' contact details: only org editors, the county's administrators and executives get it.
-  const [eventLinks, linkable] = await Promise.all([listProjectEventLinks(db, user.id, id), listLinkableEvents(db, user.id, id)]);
+  const [eventLinks, linkable, suggestions] = await Promise.all([
+    listProjectEventLinks(db, user.id, id), listLinkableEvents(db, user.id, id), listSuggestions(db, user.id, { projectId: id }),
+  ]);
   let roster: RosterRow[] | null = null;
   try {
     roster = await listRoster(db, user.id, id);
@@ -65,11 +67,7 @@ export default async function ProjectEditorPage({
     if (!(err instanceof AppError && err.code === "FORBIDDEN")) throw err;
   }
   const editing = project.canEdit && EDITABLE.includes(project.status);
-  let counties: Awaited<ReturnType<typeof listCounties>> = [];
-  if (editing) {
-    const served = (await getOrganizationProfile(db, user.id, project.orgId).catch(() => null))?.countyIds ?? [];
-    counties = (await listCounties(db)).filter((c) => served.includes(c.id) || c.id === project.countyId);
-  }
+  const sites = editing ? await listProjectSites(db, user.id, project.orgId, project.siteId) : [];
   const s = project.status;
   const act = (to: ProjectStatus) => setProjectStatusAction.bind(null, project.id, to);
   return (
@@ -106,7 +104,7 @@ export default async function ProjectEditorPage({
       <section className="card mt-5 p-4" aria-labelledby="details-h">
         <h2 id="details-h" className="mb-2 text-lg font-semibold">Details</h2>
         {editing ? (
-          <ProjectForm action={updateProjectAction.bind(null, project.id)} counties={counties} project={project} />
+          <ProjectForm action={updateProjectAction.bind(null, project.id)} sites={sites} newSiteHref={`/dashboard/orgs/${project.orgId}/sites/new`} project={project} />
         ) : (
           <dl className="grid gap-1 text-sm">
             <div><dt className="inline font-medium">For:</dt> <dd className="inline">{PROJECT_AUDIENCE_LABELS[project.audience as keyof typeof PROJECT_AUDIENCE_LABELS] ?? project.audience}</dd></div>
@@ -122,6 +120,23 @@ export default async function ProjectEditorPage({
           Attaching this project to an event lists it on that event&apos;s public page (once the project is open) so people helping in that area can find it.
           A county administrator can remove a project that does not belong.
         </p>
+        {suggestions.length > 0 && (
+          <div className="mt-3 rounded-md border border-brand p-3" aria-labelledby="suggested-events-h">
+            <h3 id="suggested-events-h" className="font-semibold">Suggested events</h3>
+            <p className="text-sm text-muted">This project is inside these events&apos; areas. Add it to show it on the event page.</p>
+            <ul className="mt-2 divide-y divide-line">
+              {suggestions.map((sg) => (
+                <li key={sg.eventId} className="grid gap-2 py-2 sm:grid-cols-[1fr_auto] sm:items-center">
+                  <Link className="font-medium text-brand underline" href={`/events/${sg.eventSlug}`}>{sg.eventName}</Link>
+                  <div className="flex flex-wrap gap-2">
+                    <ActionButton action={confirmSuggestionAction.bind(null, project.id, sg.eventId)} label="Add to event" className="btn btn-primary" />
+                    <ActionButton action={dismissSuggestionAction.bind(null, project.id, sg.eventId)} label="Not this one" />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <ul className="mt-3 divide-y divide-line">
           {eventLinks.map((l) => (
             <li key={l.eventId} className="grid gap-2 py-3 sm:grid-cols-[1fr_auto] sm:items-center">

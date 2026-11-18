@@ -5,9 +5,8 @@ import { ProjectForm } from "@/components/project-forms";
 import { createProjectAction } from "@/app/dashboard/projects/actions";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
-import { listCounties } from "@/server/modules/counties";
-import { getOrganizationProfile } from "@/server/modules/directory";
 import { listMyOrganizations } from "@/server/modules/organizations";
+import { listProjectSites } from "@/server/modules/projects";
 import { requireUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "New project", robots: { index: false } };
@@ -20,14 +19,14 @@ export default async function NewProjectPage({ params }: { params: Promise<{ org
   const org = (await listMyOrganizations(db, user.id)).find((o) => o.id === orgId && o.membershipStatus === "ACTIVE");
   const canEdit = org && org.status === "APPROVED" && !org.publicationSuspended && (org.role === "ORG_ADMIN" || org.role === "EDITOR");
   if (!org || !canEdit) notFound();
-  let served: string[];
+  let sites: Awaited<ReturnType<typeof listProjectSites>>;
   try {
-    served = (await getOrganizationProfile(db, user.id, orgId)).countyIds;
+    sites = await listProjectSites(db, user.id, orgId);
   } catch (err) {
-    if (err instanceof AppError && err.code === "NOT_FOUND") notFound();
+    if (err instanceof AppError && (err.code === "NOT_FOUND" || err.code === "FORBIDDEN")) notFound();
     throw err;
   }
-  const counties = (await listCounties(db)).filter((c) => served.includes(c.id));
+  const newSiteHref = `/dashboard/orgs/${orgId}/sites/new`;
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <Link href={`/dashboard/orgs/${orgId}/projects`} className="text-sm text-brand underline">← Projects</Link>
@@ -35,19 +34,21 @@ export default async function NewProjectPage({ params }: { params: Promise<{ org
       <p className="text-sm text-muted">
         You will add the volunteer roles next, then send it for review. Nothing is public until a county administrator approves it.
       </p>
-      {counties.length === 0 ? (
-        <p className="card mt-4 p-4 text-sm">
-          Your organization has not listed any counties as served yet.{" "}
-          {org.role === "ORG_ADMIN" ? (
-            <Link className="underline" href={`/dashboard/orgs/${orgId}/profile`}>Add them in your organization profile</Link>
-          ) : (
-            "Ask an organization administrator to add them in the organization profile."
+      {!sites.some((s) => s.usable) ? (
+        <div className="card mt-4 grid gap-2 p-4 text-sm">
+          <p>Projects start at one of your locations. Add one first.</p>
+          {sites.length > 0 && (
+            <p className="text-muted">
+              None of your current locations can host a project: its ZIP must be in a county your organization profile lists
+              as served.{" "}
+              {org.role === "ORG_ADMIN" && <Link className="underline" href={`/dashboard/orgs/${orgId}/profile`}>Check the counties you serve</Link>}
+            </p>
           )}
-          .
-        </p>
+          <p><Link className="btn btn-primary" href={newSiteHref}>Add a new location</Link></p>
+        </div>
       ) : (
         <div className="card mt-4 p-4">
-          <ProjectForm action={createProjectAction.bind(null, orgId)} counties={counties} />
+          <ProjectForm action={createProjectAction.bind(null, orgId)} sites={sites} newSiteHref={newSiteHref} />
         </div>
       )}
     </div>

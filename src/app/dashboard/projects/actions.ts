@@ -7,7 +7,7 @@ import { AppError } from "@/server/errors";
 import { easternLocalToIso, type ProjectStatus } from "@/lib/projects";
 import { VOLUNTEER_PATHS, shiftPath } from "@/lib/volunteer-paths";
 import { addNeed, createProject, removeNeed, setProjectStatus, submitProject, updateNeed, updateProject } from "@/server/modules/projects";
-import { linkProjectToEvent, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
+import { dismissSuggestion, linkProjectToEvent, unlinkProjectFromEvent } from "@/server/modules/eventlinks";
 import { markAttendance } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
@@ -126,6 +126,31 @@ export async function restoreEventAction(projectId: string, eventId: string): Pr
   refresh(projectId);
   revalidatePath("/events", "layout");
   return { ok: true, message: "Restored." };
+}
+
+/** Bound as (projectId, eventId): accept a suggested event. */
+export async function confirmSuggestionAction(projectId: string, eventId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await linkProjectToEvent(await getDriver(), user.id, projectId, eventId);
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(projectId);
+  revalidatePath("/events", "layout");
+  return { ok: true, message: "Added to the event." };
+}
+
+/** Bound as (projectId, eventId): decline a suggested event. */
+export async function dismissSuggestionAction(projectId: string, eventId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await dismissSuggestion(await getDriver(), user.id, projectId, eventId);
+  } catch (err) {
+    return toState(err);
+  }
+  refresh(projectId);
+  return { ok: true, message: "Suggestion dismissed." };
 }
 
 export async function unlinkEventAction(projectId: string, eventId: string): Promise<FormState> {
