@@ -1,7 +1,7 @@
 "use server";
 
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
+import { actionErrorState } from "@/server/action-state";
 import { signUpForNeed } from "@/server/modules/volunteers";
 import { rateLimit } from "@/server/rate-limit";
 import { clientKey } from "@/server/session";
@@ -12,11 +12,7 @@ const SUCCESS: FormState = {
   message: "Almost done: check your email and open the link to confirm. We are holding your spot for 24 hours.",
 };
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "volunteer-signup", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "volunteer-signup");
 
 /** Public sign-up. No account, so it is guarded by a per-address rate limit and a hidden trap field. */
 export async function signUpAction(needId: string, _prev: FormState, form: FormData): Promise<FormState> {

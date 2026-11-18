@@ -1,9 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { actionErrorState } from "@/server/action-state";
 import { revalidatePath } from "next/cache";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import {
   addApplicationNote,
   provideRequestedInfo,
@@ -20,11 +20,7 @@ import { getObjectStore } from "@/server/storage";
 import { getScanner } from "@/server/scanner";
 import type { FormState } from "../auth/actions";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "assistance", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "assistance");
 
 async function limited(bucket: string, limit: number, userId?: string): Promise<FormState | null> {
   const rl = rateLimit(`${bucket}:${userId ?? (await clientKey())}`, limit, 15 * 60_000);

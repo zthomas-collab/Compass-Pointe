@@ -1,19 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { actionErrorState } from "@/server/action-state";
 import { redirect } from "next/navigation";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import { dismissSuggestion, linkProjectToEvent } from "@/server/modules/eventlinks";
 import { createEvent, setEventStatus, updateEvent, type EventStatus } from "@/server/modules/events";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "events", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "events");
 
 /** Checkboxes post several values under one name; Object.fromEntries would keep only the last. */
 const eventFields = (form: FormData) => ({ ...Object.fromEntries(form.entries()), countyIds: form.getAll("countyIds") });

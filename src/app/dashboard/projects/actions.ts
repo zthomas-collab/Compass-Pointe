@@ -1,9 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { actionErrorState } from "@/server/action-state";
 import { redirect } from "next/navigation";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import { easternLocalToIso, type ProjectStatus } from "@/lib/projects";
 import { VOLUNTEER_PATHS, shiftPath } from "@/lib/volunteer-paths";
 import { addNeed, createProject, removeNeed, setProjectStatus, submitProject, updateNeed, updateProject } from "@/server/modules/projects";
@@ -12,11 +12,7 @@ import { markAttendance } from "@/server/modules/volunteers";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "projects", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "projects");
 
 const fields = (form: FormData) => Object.fromEntries(form.entries());
 
