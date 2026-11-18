@@ -3,6 +3,7 @@ import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError } from "../errors";
 import { parseOrThrow } from "./identity";
+import { publicNeeds } from "./projects";
 import type { Visibility } from "@/lib/domain";
 
 /** Module A: viewport queries. Anonymous callers only ever touch public_* read models. */
@@ -53,7 +54,11 @@ export type MapSite = {
   orgDonationUrl: string | null;
   /** Whether the operating organization has a public profile page (/orgs/<id>). */
   orgHasProfile: boolean;
+  /** Open volunteer projects placed at this site (migration 0019), urgent first. */
+  projects: MapProject[];
 };
+
+export type MapProject = { id: string; title: string; hasUrgent: boolean; spotsLeft: number };
 
 export type MapResult = { asOf: string; truncated: boolean; scope: "public" | "authenticated"; sites: MapSite[] };
 
@@ -78,7 +83,7 @@ function toResource(r: Record<string, unknown>): MapResource {
   };
 }
 
-function toSite(r: Record<string, unknown>, resources: MapResource[]): MapSite {
+function toSite(r: Record<string, unknown>, resources: MapResource[], projects: MapProject[] = []): MapSite {
   return {
     id: r.id as string, orgId: r.org_id as string, orgName: r.org_name as string, name: r.name as string,
     description: (r.description as string | null) ?? null, lat: Number(r.lat), lng: Number(r.lng),
@@ -91,10 +96,43 @@ function toSite(r: Record<string, unknown>, resources: MapResource[]): MapSite {
     serviceShort: (r.service_short as string | null) ?? null, serviceColor: (r.service_color as string | null) ?? null,
     imageId: (r.image_id as string | null) ?? null, imageAlt: (r.image_alt as string | null) ?? null,
     orgDonationUrl: (r.org_donation_url as string | null) ?? null, orgHasProfile: Boolean(r.org_has_profile),
+    projects,
   };
 }
 
-function finish(rows: Record<string, unknown>[], resRows: Record<string, unknown>[], q: MapQuery, limit: number, scope: MapResult["scope"]): MapResult {
+/**
+ * Open projects at the given sites, read from the public views (only OPEN projects of approved, non-suspended
+ * organizations), urgent first, then by title. One query for the projects and one for their needs.
+ */
+async function projectsAtSites(tx: Tx, siteIds: string[]): Promise<Map<string, MapProject[]>> {
+  const out = new Map<string, MapProject[]>();
+  if (!siteIds.length) return out;
+  const rows = await tx.query<{ id: string; site_id: string; title: string; has_urgent: boolean }>(
+    `SELECT id, site_id, title, has_urgent FROM public_projects WHERE site_id = ANY($1::uuid[])
+      ORDER BY has_urgent DESC, title, id`,
+    [siteIds],
+  );
+  const needs = await publicNeeds(tx, rows.map((r) => r.id));
+  for (const r of rows) {
+    const spotsLeft = (needs.get(r.id) ?? []).reduce((sum, n) => sum + n.spotsLeft, 0);
+    out.set(r.site_id, [...(out.get(r.site_id) ?? []), { id: r.id, title: r.title, hasUrgent: r.has_urgent, spotsLeft }]);
+  }
+  return out;
+}
+
+/** Public: where a public site's pin is, for links like /?site=<id>; null for anything not on the public map. */
+export async function getPublicSitePin(driver: Driver, siteId: unknown): Promise<{ id: string; lat: number; lng: number } | null> {
+  const id = z.string().uuid().safeParse(siteId);
+  if (!id.success) return null;
+  const rows = await runIn(driver, { kind: "anon" }, (tx) =>
+    tx.query<{ id: string; lat: number; lng: number }>(`SELECT id, lat, lng FROM public_sites WHERE id = $1`, [id.data]));
+  return rows.length ? { id: rows[0].id, lat: Number(rows[0].lat), lng: Number(rows[0].lng) } : null;
+}
+
+function finish(
+  rows: Record<string, unknown>[], resRows: Record<string, unknown>[], q: MapQuery, limit: number, scope: MapResult["scope"],
+  projects: Map<string, MapProject[]> = new Map(),
+): MapResult {
   const bySite = new Map<string, MapResource[]>();
   for (const rr of resRows) {
     const res = toResource(rr);
@@ -105,7 +143,7 @@ function finish(rows: Record<string, unknown>[], resRows: Record<string, unknown
   }
   const filtering = q.categories.length > 0 || q.confirmedOnly;
   const sites = rows
-    .map((r) => toSite(r, bySite.get(r.id as string) ?? []))
+    .map((r) => toSite(r, bySite.get(r.id as string) ?? [], projects.get(r.id as string) ?? []))
     .filter((s) => !filtering || s.resources.length > 0);
   return { asOf: new Date().toISOString(), truncated: rows.length >= limit, scope, sites };
 }
@@ -131,7 +169,7 @@ async function publicQuery(tx: Tx, q: MapQuery): Promise<MapResult> {
        FROM public_resources WHERE site_id = ANY($1::uuid[])`,
     [rows.map((r) => r.id)],
   );
-  return finish(rows, res, q, q.limit, "public");
+  return finish(rows, res, q, q.limit, "public", await projectsAtSites(tx, rows.map((r) => r.id as string)));
 }
 
 async function viewerQuery(tx: Tx, q: MapQuery): Promise<MapResult> {
@@ -169,7 +207,7 @@ async function viewerQuery(tx: Tx, q: MapQuery): Promise<MapResult> {
       WHERE r.site_id = ANY($1::uuid[]) AND r.status = 'ACTIVE'`,
     [ids],
   );
-  return finish(rows, res, q, q.limit, "authenticated");
+  return finish(rows, res, q, q.limit, "authenticated", await projectsAtSites(tx, ids));
 }
 
 export async function queryMap(driver: Driver, viewerId: string | null, raw: unknown): Promise<MapResult> {

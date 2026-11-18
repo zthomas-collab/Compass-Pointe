@@ -45,6 +45,9 @@ export default async function ProjectPage({ params }: Params) {
         {orgProfile ? <Link className="underline" href={`/orgs/${project.orgId}`}>{project.orgName}</Link> : project.orgName}
         {" · "}{project.countyName}, {project.state} {project.zip}
         {" · "}{PROJECT_AUDIENCE_LABELS[project.audience as keyof typeof PROJECT_AUDIENCE_LABELS] ?? project.audience}
+        {project.siteId && project.sitePublic && (
+          <>{" · "}<Link className="underline" href={`/?site=${project.siteId}`}>See it on the map</Link></>
+        )}
       </p>
       {events.length > 0 && (
         <p className="mt-2 text-sm">
