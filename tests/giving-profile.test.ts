@@ -70,11 +70,11 @@ describe("donation link review", () => {
   });
 
   it("review approves and rejects with scope", async () => {
-    expect(await code(reviewDonationLink(db, adminB, { orgId: orgG, decision: "APPROVED", note: "" }))).toBe("FORBIDDEN");
-    expect(await code(reviewDonationLink(db, exec, { orgId: orgG, decision: "REJECTED", note: "" }))).toBe("VALIDATION");
-    await reviewDonationLink(db, adminA, { orgId: orgG, decision: "APPROVED", note: "" });
+    expect(await code(reviewDonationLink(db, adminB, { orgId: orgG, decision: "APPROVED", note: "", url: LINK }))).toBe("FORBIDDEN");
+    expect(await code(reviewDonationLink(db, exec, { orgId: orgG, decision: "REJECTED", note: "", url: LINK }))).toBe("VALIDATION");
+    await reviewDonationLink(db, adminA, { orgId: orgG, decision: "APPROVED", note: "", url: LINK });
     expect((await getPublicOrganization(db, orgG))?.donationUrl).toBe(LINK);
-    expect(await code(reviewDonationLink(db, exec, { orgId: orgG, decision: "APPROVED", note: "" }))).toBe("CONFLICT");
+    expect(await code(reviewDonationLink(db, exec, { orgId: orgG, decision: "APPROVED", note: "", url: LINK }))).toBe("CONFLICT");
     const audit = await sys((tx) => tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_logs WHERE action = 'ORG_DONATION_LINK_APPROVED' AND subject_id = $1`, [orgG]));
     expect(audit[0].n).toBe(1);
 
@@ -83,9 +83,22 @@ describe("donation link review", () => {
     expect((await getOrganizationProfile(db, gAdmin, orgG)).donationUrlStatus).toBe("APPROVED");
     await save(gAdmin, orgG, { donationUrl: "https://give.example.org/new", countyIds: [countyA] });
     expect((await getPublicOrganization(db, orgG))?.donationUrl).toBeNull();
-    await reviewDonationLink(db, exec, { orgId: orgG, decision: "REJECTED", note: "Page is not the organization's" });
+    await reviewDonationLink(db, exec, { orgId: orgG, decision: "REJECTED", note: "Page is not the organization's", url: "https://give.example.org/new" });
     const p = await getOrganizationProfile(db, gAdmin, orgG);
     expect(p).toMatchObject({ donationUrlStatus: "REJECTED", donationUrlReviewNote: "Page is not the organization's" });
+  });
+});
+
+describe("approving the link that was reviewed", () => {
+  it("refuses to approve a link that changed after the administrator opened it", async () => {
+    await save(sAdmin, orgS, { donationUrl: "https://give.example.org/seen", countyIds: [countyA] });
+    const seen = (await listDonationLinksForReview(db, exec)).find((x) => x.orgId === orgS)!.url;
+    await save(sAdmin, orgS, { donationUrl: "https://evil.example.net/swap", countyIds: [countyA] });
+    expect(await code(reviewDonationLink(db, exec, { orgId: orgS, decision: "APPROVED", note: "", url: seen }))).toBe("CONFLICT");
+    expect((await getOrganizationProfile(db, sAdmin, orgS)).donationUrlStatus).toBe("PENDING");
+    expect(await code(reviewDonationLink(db, exec, { orgId: orgS, decision: "APPROVED", note: "" }))).toBe("VALIDATION"); // the URL is required
+    await reviewDonationLink(db, exec, { orgId: orgS, decision: "APPROVED", note: "", url: "https://evil.example.net/swap" });
+    expect((await getOrganizationProfile(db, sAdmin, orgS)).donationUrlStatus).toBe("APPROVED");
   });
 });
 

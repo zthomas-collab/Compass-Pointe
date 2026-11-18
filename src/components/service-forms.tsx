@@ -384,12 +384,13 @@ export function LogoForm({ uploadAction, removeAction, hasLogo, logoSrc }: { upl
 }
 
 /** Approve or reject an organization's pending "Give money" link. Rejecting needs a reason the organization will see. */
-export function DonationLinkReviewForm({ action, orgId }: { action: Action; orgId: string }) {
+export function DonationLinkReviewForm({ action, orgId, url }: { action: Action; orgId: string; url: string }) {
   const [state, formAction] = useActionState(action, {});
   if (state.ok) return <FormMessage state={state} />;
   return (
     <form action={formAction} className="grid gap-2 sm:grid-cols-[10rem_1fr_auto] sm:items-end">
       <input type="hidden" name="orgId" value={orgId} />
+      <input type="hidden" name="url" value={url} />
       <label className="field">
         <span>Link decision</span>
         <select name="decision" className="input" defaultValue="APPROVED">

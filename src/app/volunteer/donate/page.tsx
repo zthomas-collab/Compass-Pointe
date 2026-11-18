@@ -3,7 +3,7 @@ import Link from "next/link";
 import { DonateChooser } from "@/components/donate-chooser";
 import { OfferForm } from "@/components/offer-forms";
 import { Breadcrumb, VolunteerSectionNav } from "@/components/volunteer-nav";
-import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS, donateViewFor } from "@/lib/offers";
+import { OFFER_TYPES, OFFER_TYPE_INFO, OFFER_TYPE_LABELS, donateViewForOrg } from "@/lib/offers";
 import { VOLUNTEER_PATHS, donatePath } from "@/lib/volunteer-paths";
 import { getDriver } from "@/server/db";
 import { listCounties } from "@/server/modules/counties";
@@ -26,7 +26,7 @@ export default async function DonatePage({ searchParams }: { searchParams: Promi
   const db = await getDriver();
   const target = org === undefined ? null : await getGiveTarget(db, org);
   const orgUnavailable = org !== undefined && !target;
-  const view = donateViewFor(type, target?.acceptedOfferTypes);
+  const view = donateViewForOrg(type, { requested: org !== undefined, accepted: target?.acceptedOfferTypes ?? null });
   const donateHome = target ? donatePath(undefined, target.orgId) : VOLUNTEER_PATHS.donate;
 
   if (view.mode === "chooser") {

@@ -101,14 +101,16 @@ describe("staff side of directed offers", () => {
   it("rescue clears the org", async () => {
     const o = await submitOffer(db, directed());
     await transitionOffer(db, adminA, { offerId: o.id, to: "REVIEWED", note: "They are full" });
-    const row = await sys((tx) => tx.query<{ organization_id: string | null; status: string }>(
-      `SELECT organization_id, status FROM contribution_offers WHERE id = $1`, [o.id]));
-    expect(row[0]).toEqual({ organization_id: null, status: "REVIEWED" });
+    const row = await sys((tx) => tx.query<{ organization_id: string | null; status: string; consent_share: boolean }>(
+      `SELECT organization_id, status, consent_share FROM contribution_offers WHERE id = $1`, [o.id]));
+    // Consent was to share with that one organization, so it does not carry over to central triage.
+    expect(row[0]).toEqual({ organization_id: null, status: "REVIEWED", consent_share: false });
     const ev = await sys((tx) => tx.query<{ note: string }>(
       `SELECT note FROM contribution_offer_events WHERE offer_id = $1 AND event_type = 'STATUS_CHANGED'`, [o.id]));
     expect(ev[0].note).toContain("Giving Org");
     expect(ev[0].note).toContain(orgG);
     expect(ev[0].note).toContain("They are full");
+    expect(ev[0].note).toContain("consent to share was for that organization only");
     const seen = await runIn(db, { kind: "viewer", userId: gEd }, (tx) => tx.query(`SELECT 1 FROM contribution_offers WHERE id = $1`, [o.id]));
     expect(seen).toHaveLength(0);
   });

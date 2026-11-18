@@ -67,7 +67,11 @@ export default async function OfferPage({ params }: { params: Promise<{ id: stri
               {o.organizationName && <div><dt className="inline font-semibold">Organization: </dt><dd className="inline">{o.organizationName}</dd></div>}
               <div><dt className="inline font-semibold">Email: </dt><dd className="inline">{o.email}</dd></div>
               {o.phone && <div><dt className="inline font-semibold">Phone: </dt><dd className="inline">{o.phone}</dd></div>}
-              <div><dt className="inline font-semibold">May share details with organizations: </dt><dd className="inline">{o.consentShare ? "Yes" : "No"}</dd></div>
+              {o.recipientOrgName ? (
+                <div><dt className="inline font-semibold">Agreed to share details with: </dt><dd className="inline">{o.recipientOrgName} only</dd></div>
+              ) : (
+                <div><dt className="inline font-semibold">May share details with organizations: </dt><dd className="inline">{o.consentShare ? "Yes" : "No"}</dd></div>
+              )}
             </dl>
           </section>
           <section className="card p-4" aria-labelledby="hist">

@@ -344,12 +344,13 @@ export async function transitionOffer(driver: Driver, userId: string, raw: unkno
       // Returning a directed offer to central triage detaches it from the organization (allowed by offers_guard only here).
       const rescue = directed && input.to === "REVIEWED";
       const note = rescue
-        ? `Returned from ${o[0].org_name} (${o[0].organization_id}) to central triage.${input.note ? ` ${input.note}` : ""}`
+        ? `Returned from ${o[0].org_name} (${o[0].organization_id}) to central triage; the giver's consent to share was for that organization only.${input.note ? ` ${input.note}` : ""}`
         : input.note;
       await setActor(tx, userId, role, note);
       await tx.query(
         `UPDATE contribution_offers SET status = $2, assigned_admin_id = coalesce(assigned_admin_id, $3),
-                organization_id = CASE WHEN $4 THEN NULL ELSE organization_id END WHERE id = $1`,
+                organization_id = CASE WHEN $4 THEN NULL ELSE organization_id END,
+                consent_share = CASE WHEN $4 THEN false ELSE consent_share END WHERE id = $1`,
         [input.offerId, input.to, userId, rescue]);
       await writeAudit(tx, {
         actorUserId: userId, action: `OFFER_${input.to}`, subjectType: "contribution_offer", subjectId: input.offerId,

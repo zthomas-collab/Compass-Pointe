@@ -50,7 +50,7 @@ export default async function AdminProfilesPage() {
                   </a>
                 </p>
                 <p className="text-xs text-muted">Counties served: {l.countiesServed.join("; ") || "—"}</p>
-                <div className="mt-3"><DonationLinkReviewForm action={reviewDonationLinkAction} orgId={l.orgId} /></div>
+                <div className="mt-3"><DonationLinkReviewForm action={reviewDonationLinkAction} orgId={l.orgId} url={l.url} /></div>
               </li>
             ))}
           </ul>

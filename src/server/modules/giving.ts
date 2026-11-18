@@ -20,6 +20,8 @@ export const donationLinkReviewSchema = z
     orgId: uuid,
     decision: z.enum(["APPROVED", "REJECTED"]),
     note: z.string().trim().max(2000).optional().transform((v) => v ?? ""),
+    /** The exact link the administrator looked at; a decision on a link that has since changed is refused. */
+    url: z.string().trim().min(1).max(2000),
   })
   .refine((v) => v.decision !== "REJECTED" || v.note.length >= 5, { message: "Say why the link was not approved", path: ["note"] });
 
@@ -29,8 +31,8 @@ export async function reviewDonationLink(driver: Driver, actorId: string, raw: u
   try {
     await runIn(driver, { kind: "system" }, async (tx) => {
       const access = await loadAccess(tx, actorId);
-      const org = await tx.query<{ status: string; serves: boolean }>(
-        `SELECT o.donation_url_status AS status,
+      const org = await tx.query<{ status: string; url: string | null; serves: boolean }>(
+        `SELECT o.donation_url_status AS status, o.donation_url AS url,
                 EXISTS (SELECT 1 FROM organization_counties oc WHERE oc.org_id = o.id AND oc.county_id = ANY($2::uuid[])) AS serves
            FROM organizations o WHERE o.id = $1 FOR UPDATE`,
         [input.orgId, access.countyIds],
@@ -38,6 +40,7 @@ export async function reviewDonationLink(driver: Driver, actorId: string, raw: u
       if (!org.length) throw new AppError("NOT_FOUND", "Organization not found.");
       if (!access.executive && !org[0].serves) throw new AppError("FORBIDDEN", "You do not administer a county this organization serves.");
       if (org[0].status !== "PENDING") throw new AppError("CONFLICT", "This link is not waiting for review.");
+      if (org[0].url !== input.url) throw new AppError("CONFLICT", "The link changed since you opened this page. Review it again.");
       await tx.query(
         `UPDATE organizations SET donation_url_status = $2, donation_url_reviewed_by = $3, donation_url_reviewed_at = now(),
                 donation_url_review_note = $4 WHERE id = $1`,

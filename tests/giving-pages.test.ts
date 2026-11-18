@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { donateViewFor } from "@/lib/offers";
+import { donateViewFor, donateViewForOrg } from "@/lib/offers";
 import { donatePath } from "@/lib/volunteer-paths";
 
 /** Address rules for giving to a chosen organization (pure functions shared by the donate page and its links). */
@@ -28,5 +28,20 @@ describe("donate view with an organization's accepted types", () => {
 
   it("without a list every valid type is allowed, as before", () => {
     expect(donateViewFor("EQUIPMENT")).toEqual({ mode: "form", type: "EQUIPMENT" });
+  });
+});
+
+describe("donate view when an organization was asked for", () => {
+  it("an unavailable organization with a valid type shows the chooser (with its notice), never the central form", () => {
+    expect(donateViewForOrg("FOOD", { requested: true, accepted: null })).toEqual({ mode: "chooser" });
+  });
+
+  it("an available organization follows its accepted types", () => {
+    expect(donateViewForOrg("FOOD", { requested: true, accepted: ["FOOD"] })).toEqual({ mode: "form", type: "FOOD" });
+    expect(donateViewForOrg("EQUIPMENT", { requested: true, accepted: ["FOOD"] })).toEqual({ mode: "chooser" });
+  });
+
+  it("no organization asked for behaves as before", () => {
+    expect(donateViewForOrg("FOOD", { requested: false, accepted: null })).toEqual({ mode: "form", type: "FOOD" });
   });
 });
