@@ -33,12 +33,20 @@ export default async function OfferPage({ params }: { params: Promise<{ id: stri
     throw err;
   }
   const counties = o.canAssignCounty ? await listCounties(db) : [];
-  const labels = Object.fromEntries(Object.entries(OFFER_STATUS_LABELS));
+  const labels: Record<string, string> = Object.fromEntries(Object.entries(OFFER_STATUS_LABELS));
+  // On an offer sent to an organization, "Reviewed" means taking it back from the organization.
+  if (o.recipientOrgId) labels.REVIEWED = "Return to central triage";
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6">
       <p className="text-sm"><Link className="underline" href="/admin/offers">← All offers</Link></p>
       <h1 className="mt-2 text-3xl"><span className="font-mono">{o.reference}</span></h1>
       <p className="mt-1"><span className="badge tone-brand">{OFFER_STATUS_LABELS[o.status]}</span> {OFFER_TYPE_LABELS[o.contributionType]}</p>
+      {o.recipientOrgName && (
+        <p className="card mt-3 p-3 text-sm">
+          Sent by the giver to <Link className="font-semibold underline" href={`/orgs/${o.recipientOrgId}`}>{o.recipientOrgName}</Link>, which accepts or
+          declines it. You can return it to central triage (the organization then stops seeing it) or cancel it.
+        </p>
+      )}
       <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_20rem]">
         <div className="grid content-start gap-5">
           <section className="card p-4" aria-labelledby="offer">

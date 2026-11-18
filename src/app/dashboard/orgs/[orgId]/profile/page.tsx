@@ -60,6 +60,10 @@ export default async function OrgProfilePage({ params }: { params: Promise<{ org
               primary: profile.primaryServiceType ?? profile.requestedServiceType,
               social: profile.socialLinks,
               countyIds: profile.countyIds,
+              donationUrl: profile.donationUrl,
+              donationUrlStatus: profile.donationUrlStatus,
+              donationUrlReviewNote: profile.donationUrlReviewNote,
+              acceptedOfferTypes: profile.acceptedOfferTypes,
             }}
           />
         ) : (

@@ -66,6 +66,7 @@ export default async function DashboardPage() {
                   <h3 className="font-semibold">Staging sites ({sites.length})</h3>
                   <span className="flex flex-wrap gap-2">
                     <Link className="btn btn-secondary" href={`/dashboard/orgs/${o.id}/projects`}>Projects</Link>
+                    {canEdit && <Link className="btn btn-secondary" href={`/dashboard/orgs/${o.id}/offers`}>Offers</Link>}
                     {canEdit && <Link className="btn btn-primary" href={`/dashboard/orgs/${o.id}/sites/new`}>New site</Link>}
                   </span>
                 </div>
