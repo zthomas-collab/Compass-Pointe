@@ -37,6 +37,9 @@ Registrant picks a main service type (plus other services) → admin confirms or
 ### J8 — Location photo ✅ implemented
 Org editor opens a site → **Add a photo** (phone camera or file) + description → photo is re-encoded with location metadata removed → shown on the map/list to exactly the people who can see the site.
 
+### J9 — Org starts a project at a location, it reaches the map and the event ✅ implemented
+Org editor adds a **location** (site) whose ZIP is in a county the org serves → **New project** → picks that location (county and ZIP come from it) → adds volunteer roles → sends for review → a county administrator approves → the app **suggests** every active disaster event whose counties (or ZIPs) cover it → the org editor or county administrator clicks **Add to event** (or **Not this one**) → the project shows on the map at its location ("Volunteers needed here"), on the event page, and on the org's public profile (Volunteer projects · Where we work · Responding to). If the location moves to another covered county, its open projects follow it and go back for review.
+
 ### Planned journeys
 Road report submission/verification (Phase 5) · restricted (authorized-only) contacts (Phase 4) · stale-record reminder emails (Phase 6) · J9 public "report incorrect info" (Phase 6) · J10 staff invite/revoke (Phase 4).
 
@@ -46,7 +49,7 @@ Legend: ✅ live in this slice · ⏳ planned (not linked in the UI until it wor
 
 ```
 Public
-├── /                         ✅ Home / Map + List + Search + Filters
+├── /                         ✅ Home / Map + List + Search + Filters; ?site=<id> opens that location (its open projects listed)
 ├── /safety                   ✅ About / Safety / corrections guidance
 ├── /register                 ↪ redirects to /signin?tab=register
 ├── /signin                   ✅ For organizations: Sign in + Register tabs on one page
@@ -56,6 +59,7 @@ Public
 ├── /roads                    ⏳ Road Conditions
 ├── /directory                ⏳ Nonprofit Directory (merged into Contacts for now)
 ├── /contacts                 ✅ Contacts (the spec's public Black Book) — name/description/type/ZIP + radius search
+├── /orgs/:id                 ✅ Public organization profile: how to help, volunteer projects, where we work (locations), events it is responding to, contact
 ├── /events                   ✅ Events: open disaster areas, closed archive
 ├── /events/:slug             ✅ Event: area, help available there, and the volunteer Needs of projects attached to it
 ├── /volunteer                ✅ Volunteer & donate hub: "How do you want to help?", ZIP search, shifts needed now, quick gifts, how it works
@@ -72,7 +76,7 @@ Authenticated
 ├── /dashboard/orgs/:id/sites/new  ✅ New staging site
 ├── /dashboard/orgs/:id/projects   ✅ My organization's projects
 ├── /dashboard/orgs/:id/offers     ✅ Offers givers sent to my organization (accept, schedule, complete, decline)
-├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete; volunteer roster and attendance; attach it to disaster events
+├── /dashboard/projects/:id        ✅ Edit a project and its volunteer roles, send for review, pause, complete; volunteer roster and attendance; attach it to disaster events, add or dismiss suggested events
 ├── /dashboard/sites/:id      ✅ Site detail: inventory, Update Availability, history
 ├── /dashboard/roads/new      ⏳ Submit Road Report
 ├── /dashboard/orgs/:id/profile ✅ My Organization Profile (public contacts, office ZIP, services, Contacts consent)
@@ -82,7 +86,7 @@ Authenticated
 
 Administrative
 ├── /admin/organizations      ✅ Organizations Awaiting Approval (+ suspend/reinstate)
-├── /admin/events             ✅ Events: create, edit, activate, recover, close (executives)
+├── /admin/events             ✅ Events: create, edit, activate, recover, close (executives); suggested projects to add or dismiss
 ├── /admin/projects           ✅ Project review: approve or return pending projects (county admins, executives)
 ├── /admin/moderation         ⏳ Resource Moderation
 ├── /admin/publication        ⏳ Map Publication Controls (active-ops toggle)
