@@ -274,13 +274,16 @@ const norm = (col: string) => `lower(btrim(regexp_replace(${col}, '[[:space:]]+c
 const SITE_IN_EVENT_AREA = `(
   CASE WHEN cardinality(pe.zips) > 0
        THEN ps.postal_code = ANY (pe.zips)
+       WHEN ps.county_id IS NOT NULL
+       THEN EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c WHERE (c->>'id')::uuid = ps.county_id)
        ELSE EXISTS (SELECT 1 FROM jsonb_array_elements(pe.counties) c
                      WHERE c->>'state' = ps.state AND ${norm("c->>'name'")} = ${norm("ps.county")})
   END)`;
 
 /**
- * Public: sites that serve an event's area. With ZIPs set, a site matches on its ZIP; otherwise on county
- * (same state, name tolerant of a "County" suffix). Reads only public views, so private data cannot leak,
+ * Public: sites that serve an event's area. With ZIPs set, a site matches on its ZIP; otherwise on the county derived
+ * from its ZIP (migration 0018), or, when none could be derived, on its typed county name (same state, tolerant of a
+ * "County" suffix). Reads only public views, so private data cannot leak,
  * and a DRAFT event (absent from public_events) yields nothing.
  */
 export async function getEventHelp(driver: Driver, eventId: string): Promise<EventHelpSite[]> {
