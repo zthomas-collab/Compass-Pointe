@@ -1,17 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { actionErrorState } from "@/server/action-state";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import { addOrgOfferNote, transitionOrgOffer } from "@/server/modules/org-offers";
 import { requireUser } from "@/server/session";
 import type { FormState } from "@/app/auth/actions";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "org-offers", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "org-offers");
 
 const text = (form: FormData, name: string) => String(form.get(name) ?? "");
 

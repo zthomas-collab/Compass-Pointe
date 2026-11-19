@@ -1,4 +1,5 @@
 import type { Tx } from "../db";
+import { inEventAreaSql } from "./sql";
 
 /**
  * Stage 5, "suggest, then confirm": geography proposes (project, event) pairs as SUGGESTED rows in
@@ -9,10 +10,7 @@ import type { Tx } from "../db";
  * import cycle (eventlinks.ts already imports projects.ts). Callers run in the system context.
  */
 
-/** The event-area rule shared with eventlinks.ts and public_event_links: event ZIPs when it has any, else its counties. */
-const IN_AREA = `CASE WHEN EXISTS (SELECT 1 FROM event_zips z WHERE z.event_id = e.id)
-                      THEN EXISTS (SELECT 1 FROM event_zips z WHERE z.event_id = e.id AND z.zip = p.zip)
-                      ELSE EXISTS (SELECT 1 FROM event_counties ec WHERE ec.event_id = e.id AND ec.county_id = p.county_id) END`;
+const IN_AREA = inEventAreaSql("e.id", "p.zip", "p.county_id");
 
 /**
  * Suggest every ACTIVE or RECOVERY event whose area contains this OPEN project. Pairs that already have a link row in

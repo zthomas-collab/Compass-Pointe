@@ -1,19 +1,15 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { actionErrorState } from "@/server/action-state";
 import { revalidatePath } from "next/cache";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import { addOfferNote, assignOfferCounty, setNotificationEmail, submitOffer, transitionOffer } from "@/server/modules/offers";
 import { rateLimit } from "@/server/rate-limit";
 import { clientKey, requireUser } from "@/server/session";
 import type { FormState } from "../auth/actions";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "offers", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "offers");
 
 const text = (form: FormData, name: string) => String(form.get(name) ?? "");
 

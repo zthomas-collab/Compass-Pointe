@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { actionErrorState } from "@/server/action-state";
 import { getDriver } from "@/server/db";
 import { AppError } from "@/server/errors";
 import {
@@ -15,13 +16,10 @@ import {
 import { rateLimit } from "@/server/rate-limit";
 import { clearSessionCookie, clientKey, getSessionToken, postSignInPath, setSessionCookie } from "@/server/session";
 
-export type FormState = { error?: string; fieldErrors?: Record<string, string[]>; ok?: boolean; message?: string };
+export type { FormState } from "@/server/action-state";
+import type { FormState } from "@/server/action-state";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "auth", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "auth");
 
 async function limited(bucket: string, limit: number): Promise<FormState | null> {
   const rl = rateLimit(`${bucket}:${await clientKey()}`, limit, 15 * 60_000);

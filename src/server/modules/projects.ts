@@ -6,6 +6,7 @@ import { AppError, fromDbError } from "../errors";
 import { canManageCounty, loadAccess } from "./access";
 import { DEFAULT_RADIUS_MILES, RADIUS_OPTIONS_MILES, membershipRole } from "./directory";
 import { parseOrThrow } from "./identity";
+import { likePattern } from "./sql";
 import { writeAudit } from "./shared";
 import { suggestForProject } from "./suggestions";
 import { TAKEN_SQL, noticeProjectCancelled } from "./volunteers";
@@ -583,7 +584,6 @@ export const projectSearchSchema = z.object({
 });
 
 const METERS_PER_MILE = 1609.344;
-const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 export type DbPublicProject = {
   id: string; org_id: string; org_name: string; title: string; description: string; county_name: string; state: string; zip: string;
@@ -619,6 +619,14 @@ export async function publicNeeds(tx: Tx, projectIds: string[]): Promise<Map<str
   return out;
 }
 
+/**
+ * The public_projects columns toPublicProject reads (for the view aliased `a`), plus whether the project's site is on
+ * the public map. Every public project query selects these, so the shape cannot drift between pages.
+ */
+export const publicProjectColumns = (a: string): string =>
+  `${a}.id, ${a}.org_id, ${a}.org_name, ${a}.title, ${a}.description, ${a}.county_name, ${a}.state, ${a}.zip, ${a}.audience,
+   ${a}.total_slots, ${a}.has_urgent, ${a}.site_id, EXISTS (SELECT 1 FROM public_sites ps WHERE ps.id = ${a}.site_id) AS site_public`;
+
 export const toPublicProject = (p: DbPublicProject, needs: PublicNeed[]): PublicProject => ({
   id: p.id, orgId: p.org_id, orgName: p.org_name, title: p.title, description: p.description, countyName: p.county_name,
   state: p.state, zip: p.zip, audience: p.audience, totalSlots: p.total_slots, spotsLeft: needs.reduce((sum, n) => sum + n.spotsLeft, 0), hasUrgent: p.has_urgent, needs,
@@ -645,9 +653,7 @@ export async function searchProjects(
               SELECT p.*, CASE WHEN origin.pt IS NULL OR ics.zip_point(p.zip) IS NULL THEN NULL
                                ELSE ST_Distance(ics.zip_point(p.zip), origin.pt) END AS dist_m
                 FROM public_projects p CROSS JOIN origin)
-       SELECT s.id, s.org_id, s.org_name, s.title, s.description, s.county_name, s.state, s.zip, s.audience,
-              s.total_slots, s.has_urgent, s.dist_m, s.site_id,
-              EXISTS (SELECT 1 FROM public_sites ps WHERE ps.id = s.site_id) AS site_public
+       SELECT ${publicProjectColumns("s")}, s.dist_m
          FROM scored s
         WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[]) t
                            WHERE NOT (s.title ILIKE t OR s.description ILIKE t
@@ -669,9 +675,7 @@ export async function getPublicProject(driver: Driver, id: string): Promise<Publ
   if (!z.string().uuid().safeParse(id).success) return null;
   return runIn(driver, { kind: "anon" }, async (tx) => {
     const rows = await tx.query<DbPublicProject>(
-      `SELECT p.id, p.org_id, p.org_name, p.title, p.description, p.county_name, p.state, p.zip, p.audience, p.total_slots,
-              p.has_urgent, p.site_id, EXISTS (SELECT 1 FROM public_sites ps WHERE ps.id = p.site_id) AS site_public
-         FROM public_projects p WHERE p.id = $1`,
+      `SELECT ${publicProjectColumns("p")} FROM public_projects p WHERE p.id = $1`,
       [id],
     );
     if (!rows.length) return null;

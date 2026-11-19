@@ -1,9 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { actionErrorState } from "@/server/action-state";
 import QRCode from "qrcode";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import { resolveSession } from "@/server/modules/identity";
 import { beginMfaEnrollment, confirmMfaEnrollment, verifyMfaChallenge } from "@/server/modules/mfa";
 import { rateLimit } from "@/server/rate-limit";
@@ -12,11 +12,7 @@ import type { FormState } from "./actions";
 
 export type MfaSetupState = FormState & { secret?: string; qrSvg?: string; recoveryCodes?: string[] };
 
-function toState(err: unknown): MfaSetupState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "mfa", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): MfaSetupState => actionErrorState(err, "mfa");
 
 /** Second step of sign-in. The per-account lockout lives in the module; this adds a per-address brake. */
 export async function verifyMfaAction(_prev: FormState, form: FormData): Promise<FormState> {

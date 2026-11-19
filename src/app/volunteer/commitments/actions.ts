@@ -1,16 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { actionErrorState } from "@/server/action-state";
 import { getDriver } from "@/server/db";
-import { AppError } from "@/server/errors";
 import { cancelCommitment, confirmCommitment } from "@/server/modules/volunteers";
 import type { FormState } from "@/app/auth/actions";
 
-function toState(err: unknown): FormState {
-  if (err instanceof AppError) return { error: err.message, fieldErrors: err.fieldErrors };
-  console.error(JSON.stringify({ level: "error", action: "volunteer-commitment", message: (err as Error).message }));
-  return { error: "Something went wrong. Please try again." };
-}
+const toState = (err: unknown): FormState => actionErrorState(err, "volunteer-commitment");
 
 /** Bound as (token) and used as a form action; React's extra (prev, form) arguments are ignored. Only an explicit press confirms. */
 export async function confirmCommitmentAction(token: string): Promise<FormState> {

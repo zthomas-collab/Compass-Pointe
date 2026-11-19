@@ -3,6 +3,7 @@ import type { Driver, Tx } from "../db";
 import { runIn } from "../db/context";
 import { AppError } from "../errors";
 import { parseOrThrow } from "./identity";
+import { likePattern } from "./sql";
 import { publicNeeds } from "./projects";
 import type { Visibility } from "@/lib/domain";
 
@@ -227,9 +228,6 @@ export type PlaceHit = {
 
 const searchSchema = z.string().trim().min(2).max(80);
 
-function likePattern(q: string) {
-  return `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-}
 
 /**
  * Map search. A 5-digit ZIP resolves to the ZIP's center (Census reference data, or estimated
