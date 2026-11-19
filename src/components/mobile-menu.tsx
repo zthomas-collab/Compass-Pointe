@@ -35,7 +35,7 @@ export function MobileMenu({ summaryClassName, panelClassName, children }: {
   }, []);
 
   return (
-    <details ref={ref} className="relative md:hidden">
+    <details ref={ref} className="relative xl:hidden">
       <summary className={summaryClassName}>
         <span aria-hidden="true">☰</span> Menu
       </summary>
