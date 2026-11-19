@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "db:migrate": "tsx scripts/cli.ts migrate",
     "db:seed": "tsx scripts/cli.ts seed",
+    "db:reset": "tsx scripts/cli.ts reset",
     "admin:grant": "tsx scripts/cli.ts grant",
     "mfa:reset": "tsx scripts/cli.ts mfa-reset",
     "notifications:send": "tsx scripts/cli.ts notifications",
