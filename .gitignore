@@ -47,3 +47,6 @@ next-env.d.ts
 
 # generated vendor assets (scripts/copy-vendor.mjs)
 /public/vendor/
+
+# Local database reset backups (never committed)
+/backups/

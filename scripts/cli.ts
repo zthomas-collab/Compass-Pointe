@@ -11,7 +11,6 @@
 import { createDriver, type Driver, type Tx } from "../src/server/db";
 import { migrate } from "../src/server/db/migrate";
 import { runIn } from "../src/server/db/context";
-import { grantPlatformRole } from "../src/server/modules/organizations";
 import { operatorResetMfa } from "../src/server/modules/mfa";
 import { processNotificationJobs, queueStats } from "../src/server/modules/notifications";
 import { createTransport } from "../src/server/email";
@@ -20,6 +19,10 @@ import { addNeed, createProject, submitProject } from "../src/server/modules/pro
 import { linkProjectToEvent } from "../src/server/modules/eventlinks";
 import { uploadSiteImage } from "../src/server/modules/images";
 import { getObjectStore } from "../src/server/storage";
+import { dumpAllData, resetBlockedReason, resolveResetTarget, wipeData } from "../src/server/reset";
+import { grantPlatformRole } from "../src/server/modules/organizations";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import sharp from "sharp";
 
 /** Placeholder photo, visibly labelled synthetic — never a real location photo. */
@@ -255,6 +258,76 @@ async function importZips(file: string | undefined) {
   await db.close();
 }
 
+/**
+ * `npm run db:reset -- RESET <token> [--no-backup] [--seed] [--grant=email]`
+ *
+ * Wipes all data from a NON-production database after writing a JSON backup. Blocks production outright (no override),
+ * and requires the operator to type the target's name so it can never be run by accident. This is the only "wipe all",
+ * and it is nothing like a hidden password: it is explicit, confirmed, logged to stdout and backed up first.
+ */
+async function resetCommand(args: string[]): Promise<void> {
+  const flags = new Set(args.filter((a) => a.startsWith("--")));
+  const grantFlag = args.find((a) => a.startsWith("--grant="));
+  const positional = args.filter((a) => !a.startsWith("--"));
+
+  const target = resolveResetTarget();
+  const blocked = resetBlockedReason(target);
+  if (blocked) {
+    console.error(`Refusing to reset: ${blocked}`);
+    console.error(`Target was ${target.label}.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const typed = positional.join(" ").trim();
+  const expected = `RESET ${target.confirmToken}`;
+  if (typed !== expected) {
+    console.error(`This wipes ALL data in ${target.label}.`);
+    console.error(`To confirm, re-run with the exact phrase:  npm run db:reset -- ${expected}`);
+    console.error(`Options: --no-backup  --seed  --grant=<email>`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const db = await createDriver();
+  await migrate(db);
+
+  if (!flags.has("--no-backup")) {
+    const dir = path.join(/* turbopackIgnore: true */ process.cwd(), "backups");
+    mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = path.join(dir, `reset-${target.confirmToken}-${stamp}.json`);
+    const data = await dumpAllData(db);
+    const rows = Object.values(data).reduce((n, t) => n + t.length, 0);
+    writeFileSync(/* turbopackIgnore: true */ file, JSON.stringify({ takenAt: new Date().toISOString(), target: target.label, data }, null, 2));
+    console.log(`Backup written: ${file} (${Object.keys(data).length} tables, ${rows} rows).`);
+  } else {
+    console.log("Skipping backup (--no-backup).");
+  }
+
+  const { tablesCleared, preserved } = await wipeData(db);
+  console.log(`Wiped ${tablesCleared} tables in ${target.label}. Kept reference tables: ${preserved.join(", ")}.`);
+
+  if (flags.has("--seed")) {
+    await db.close();
+    await seed();
+    console.log("Re-seeded synthetic demo data.");
+  } else {
+    await db.close();
+  }
+
+  if (grantFlag) {
+    const email = grantFlag.slice("--grant=".length).trim();
+    if (email) {
+      const db2 = await createDriver();
+      await migrate(db2);
+      const id = await grantPlatformRole(db2, { email, role: "PLATFORM_ADMIN", reason: "Re-bootstrap after reset" });
+      console.log(`Granted PLATFORM_ADMIN to ${email} (user ${id}).`);
+      await db2.close();
+    }
+  }
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === "migrate") {
@@ -298,8 +371,10 @@ async function main() {
     await operatorResetMfa(db, email, reason);
     console.log(`MFA removed for ${email}; their sessions were ended. They must enroll again at next sign-in.`);
     await db.close();
+  } else if (cmd === "reset") {
+    await resetCommand(args);
   } else {
-    console.log("Commands: migrate | seed | grant <email> [role] [reason] | mfa-reset <email> <reason> | notifications [--watch]");
+    console.log("Commands: migrate | seed | reset | grant <email> [role] [reason] | mfa-reset <email> <reason> | notifications [--watch]");
     process.exitCode = 1;
   }
 }

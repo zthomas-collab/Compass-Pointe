@@ -49,6 +49,24 @@ GRANT ics_anon, ics_app TO ics_web;
 ## Rollback — **UNTESTED**
 Roll back the container image to the previous tag. Because migrations are expand/contract, the previous image works against the new schema. Never roll back a migration that dropped data; restore instead.
 
+## Operator access (admin accounts)
+Admin access is an ordinary account with a platform role — there is no built-in or hidden account, and no password baked into the code. To grant yourself (or anyone) platform admin, run the CLI against the target database (set `DATABASE_URL` for staging/production; omit it for local PGlite):
+
+```
+npm run admin:grant -- you@example.com PLATFORM_ADMIN "owner bootstrap"
+```
+
+This creates the user if needed and grants the role (idempotent, audited as `ROLE_GRANTED`). Sign in at `/signin` with that email — a one-time link, plus an authenticator code once MFA is required (`REQUIRE_MFA_FOR_PRIVILEGED`). Lost device, no recovery codes: `npm run mfa:reset -- you@example.com "how you verified identity"`. Roles are revocable in `role_assignments` (set `revoked_at`); never share one account.
+
+## Wiping a non-production database (`db:reset`)
+`npm run db:reset` clears all data from a **non-production** database after writing a JSON backup of every table. It exists for resetting local, test and staging environments. It is **not** reachable by signing in, and there is no secret password or hidden trigger — a destructive wipe is always an explicit, confirmed operator command.
+
+- It **refuses outright** when `NODE_ENV=production`, or when `DATABASE_URL` points at a host that is not `localhost` and whose database name carries no non-production marker (`dev`, `test`, `staging`, `qa`, `sandbox`, `preview`, `demo`, `local`, …). There is no override flag.
+- It requires the operator to type the target's name: `npm run db:reset -- RESET <database-name>` (or `RESET pglite` for local PGlite). The exact phrase is printed if you run it without one.
+- It writes `backups/reset-<name>-<timestamp>.json` first (skip with `--no-backup`), then truncates every table except the reference/bookkeeping tables (`schema_migrations`, `zip_county`), so the app still runs afterward.
+- Optional: `--seed` reloads synthetic demo data; `--grant=you@example.com` re-grants platform admin after the wipe.
+- The `backups/` directory is git-ignored. For a real database, also take a managed/`pg_dump` backup — the JSON dump is a convenience, not your disaster-recovery backup.
+
 ## Backup & restore — **UNTESTED**
 Managed PITR with ≥ 14-day retention plus a daily logical dump to a separate account. Quarterly drill: restore to a new instance, run `npm test` against it with `DATABASE_URL`, compare row counts of `staging_sites`, `resources`, `resource_update_events`, `audit_logs`, record timings (RTO/RPO targets 4 h / 15 min in SOP-014).
 
