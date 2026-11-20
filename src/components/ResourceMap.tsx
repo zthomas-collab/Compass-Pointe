@@ -2,7 +2,7 @@
 
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
+import type { Map as MLMap, GeoJSONSource, StyleSpecification } from "maplibre-gl";
 import {
   STATUS_KEY,
   bestSiteStatus,
@@ -21,8 +21,27 @@ type Bbox = { w: number; s: number; e: number; n: number };
 type Category = { code: string; label: string };
 
 const STYLE_URL = process.env.NEXT_PUBLIC_MAP_STYLE_URL || "https://tiles.openfreemap.org/styles/liberty";
-const [DEF_LNG, DEF_LAT, DEF_ZOOM] = (process.env.NEXT_PUBLIC_DEFAULT_VIEW || "-82.55,35.6,9").split(",").map(Number);
+const CUSTOM_VIEW = process.env.NEXT_PUBLIC_DEFAULT_VIEW;
+const [DEF_LNG, DEF_LAT, DEF_ZOOM] = (CUSTOM_VIEW || "-124,45,2").split(",").map(Number);
+const US_BOUNDS: [[number, number], [number, number]] = [[-180, 18], [-66, 72]];
 const MAX_SPAN = 12;
+
+// Census state boundaries from us-atlas 3.0.1, served with the app.
+const US_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    states: {
+      type: "geojson",
+      data: "/maps/us-states.geojson",
+      attribution: "U.S. Census Bureau · us-atlas",
+    },
+  },
+  layers: [
+    { id: "water", type: "background", paint: { "background-color": "#dceaf2" } },
+    { id: "state-fill", type: "fill", source: "states", paint: { "fill-color": "#edf2e6" } },
+    { id: "state-border", type: "line", source: "states", paint: { "line-color": "#71867d", "line-width": 1 } },
+  ],
+};
 
 function boundsAround(lng: number, lat: number, d = 0.4): Bbox {
   return { w: lng - d, s: lat - d, e: lng + d, n: lat + d };
@@ -47,7 +66,10 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
   const abortRef = useRef<AbortController | null>(null);
   const [mapFailed, setMapFailed] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-  const [bbox, setBbox] = useState<Bbox>(boundsAround(DEF_LNG, DEF_LAT));
+  const [basicMap, setBasicMap] = useState(false);
+  const [bbox, setBbox] = useState<Bbox>(() => initialSite
+    ? boundsAround(initialSite.lng, initialSite.lat)
+    : CUSTOM_VIEW ? boundsAround(DEF_LNG, DEF_LAT) : { w: -180, s: 18, e: -66, n: 72 });
   const [center, setCenter] = useState(initialSite ? { lat: initialSite.lat, lng: initialSite.lng } : { lat: DEF_LAT, lng: DEF_LNG });
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -69,11 +91,12 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
 
   // ---- data loading -------------------------------------------------------
   const load = useCallback(async () => {
+    abortRef.current?.abort();
     if (tooWide) {
       setError(null);
+      setLoading(false);
       return;
     }
-    abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const p = new URLSearchParams({
@@ -117,6 +140,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
   // ---- map setup -----------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       try {
         const maplibregl = await import("maplibre-gl");
@@ -128,6 +152,10 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
           style: STYLE_URL,
           center: initialSiteRef.current ? [initialSiteRef.current.lng, initialSiteRef.current.lat] : [DEF_LNG, DEF_LAT],
           zoom: initialSiteRef.current ? 14 : DEF_ZOOM,
+          ...(!initialSiteRef.current && !CUSTOM_VIEW && {
+            bounds: US_BOUNDS,
+            fitBoundsOptions: { padding: 16 },
+          }),
           attributionControl: { compact: true },
         });
         mapRef.current = map;
@@ -139,10 +167,23 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
           const c = map.getCenter();
           setCenter({ lat: c.lat, lng: c.lng });
         };
-        map.on("error", (e) => {
-          if (!map.isStyleLoaded() && String(e.error?.message ?? "").match(/style|fetch|load/i)) setMapFailed(true);
+        let ready = false;
+        let usingBasicMap = false;
+        const switchToBasicMap = () => {
+          if (ready || usingBasicMap) return;
+          usingBasicMap = true;
+          clearTimeout(startupTimer);
+          startupTimer = setTimeout(() => setMapFailed(true), 10_000);
+          setBasicMap(true);
+          map.setStyle(US_STYLE, { diff: false });
+        };
+        startupTimer = setTimeout(switchToBasicMap, 5_000);
+        map.on("error", () => {
+          if (!ready && !usingBasicMap) switchToBasicMap();
         });
         map.on("load", () => {
+          ready = true;
+          clearTimeout(startupTimer);
           map.addSource("sites", { type: "geojson", data: { type: "FeatureCollection", features: [] }, cluster: true, clusterRadius: 45, clusterMaxZoom: 13 });
           map.addLayer({ id: "clusters", type: "circle", source: "sites", filter: ["has", "point_count"],
             paint: { "circle-color": BRAND_FOREST, "circle-opacity": 0.9, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 28], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
@@ -200,6 +241,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
     })();
     return () => {
       cancelled = true;
+      clearTimeout(startupTimer);
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -212,7 +254,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
     if (!src) return;
     src.setData({
       type: "FeatureCollection",
-      features: (data?.sites ?? []).map((s) => ({
+      features: (tooWide ? [] : data?.sites ?? []).map((s) => ({
         type: "Feature",
         geometry: { type: "Point", coordinates: [s.lng, s.lat] },
         properties: (() => {
@@ -228,18 +270,18 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         })(),
       })),
     });
-  }, [data, mapReady]);
+  }, [data, mapReady, tooWide]);
 
   // ---- derived -----------------------------------------------------------
   const sites = useMemo(
-    () => [...(data?.sites ?? [])].sort((a, b) => distanceKm(center.lat, center.lng, a.lat, a.lng) - distanceKm(center.lat, center.lng, b.lat, b.lng)),
-    [data, center],
+    () => tooWide ? [] : [...(data?.sites ?? [])].sort((a, b) => distanceKm(center.lat, center.lng, a.lat, a.lng) - distanceKm(center.lat, center.lng, b.lat, b.lng)),
+    [data, center, tooWide],
   );
   const selected = sites.find((s) => s.id === selectedId) ?? null;
   const stale = Boolean(error && data);
 
   function flyTo(lng: number, lat: number, zoom = 13) {
-    if (mapRef.current) mapRef.current.flyTo({ center: [lng, lat], zoom });
+    if (mapRef.current && !mapFailed) mapRef.current.flyTo({ center: [lng, lat], zoom });
     else {
       setBbox(boundsAround(lng, lat, 0.1));
       setCenter({ lat, lng });
@@ -347,10 +389,11 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         </details>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
           {loading && <span className="text-muted">Loading…</span>}
-          {lastSync && !stale && <span className="text-muted">Data as of {fmtTime(lastSync)}</span>}
-          {data?.scope === "authenticated" && <span className="badge tone-warn">Signed in: includes restricted listings you are authorized to see</span>}
-          {data?.truncated && <span className="badge tone-warn">Showing the {data.sites.length} most recently updated sites — zoom in for all</span>}
-          {tooWide && <span className="badge tone-muted">Zoom in to load resources</span>}
+          {!tooWide && lastSync && !stale && <span className="text-muted">Data as of {fmtTime(lastSync)}</span>}
+          {!tooWide && data?.scope === "authenticated" && <span className="badge tone-warn">Signed in: includes restricted listings you are authorized to see</span>}
+          {!tooWide && data?.truncated && <span className="badge tone-warn">Showing the {data.sites.length} most recently updated sites — zoom in for all</span>}
+          {tooWide && <span className="badge tone-muted">Zoom in or search to find local resources</span>}
+          {basicMap && !mapFailed && <span className="text-muted">Showing U.S. state boundaries. Street details are unavailable.</span>}
           <span className="ml-auto flex gap-1 md:hidden" role="group" aria-label="View">
             <button className={`btn px-3 ${view === "map" ? "btn-primary" : "btn-secondary"}`} onClick={() => setView("map")} aria-pressed={view === "map"}>Map</button>
             <button className={`btn px-3 ${view === "list" ? "btn-primary" : "btn-secondary"}`} onClick={() => setView("list")} aria-pressed={view === "list"}>List</button>
