@@ -13,11 +13,11 @@ import {
 import { StatusPill } from "./status-icons";
 import { MapLegend } from "./MapLegend";
 import { SiteDetail } from "./SiteDetail";
+import { BasicResourceMap, STATE_BOUNDARIES_URL, type MapBounds } from "./BasicResourceMap";
 import { BRAND_FOREST, CHARCOAL, fmtTime, statusMatch } from "./map-shared";
 import type { MapResult, PlaceHit } from "@/server/modules/map";
 import type { ServiceType } from "@/server/modules/directory";
 
-type Bbox = { w: number; s: number; e: number; n: number };
 type Category = { code: string; label: string };
 
 const STYLE_URL = process.env.NEXT_PUBLIC_MAP_STYLE_URL || "https://tiles.openfreemap.org/styles/liberty";
@@ -32,7 +32,7 @@ const US_STYLE: StyleSpecification = {
   sources: {
     states: {
       type: "geojson",
-      data: "/maps/us-states.geojson",
+      data: STATE_BOUNDARIES_URL,
       attribution: "U.S. Census Bureau · us-atlas",
     },
   },
@@ -43,8 +43,8 @@ const US_STYLE: StyleSpecification = {
   ],
 };
 
-function boundsAround(lng: number, lat: number, d = 0.4): Bbox {
-  return { w: lng - d, s: lat - d, e: lng + d, n: lat + d };
+function boundsAround(lng: number, lat: number, d = 0.4): MapBounds {
+  return { w: Math.max(-180, lng - d), s: Math.max(-90, lat - d), e: Math.min(180, lng + d), n: Math.min(90, lat + d) };
 }
 
 const KM_TO_MI = 0.621371;
@@ -67,7 +67,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
   const [mapFailed, setMapFailed] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [basicMap, setBasicMap] = useState(false);
-  const [bbox, setBbox] = useState<Bbox>(() => initialSite
+  const [bbox, setBbox] = useState<MapBounds>(() => initialSite
     ? boundsAround(initialSite.lng, initialSite.lat)
     : CUSTOM_VIEW ? boundsAround(DEF_LNG, DEF_LAT) : { w: -180, s: 18, e: -66, n: 72 });
   const [center, setCenter] = useState(initialSite ? { lat: initialSite.lat, lng: initialSite.lng } : { lat: DEF_LAT, lng: DEF_LNG });
@@ -169,11 +169,16 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         };
         let ready = false;
         let usingBasicMap = false;
+        const showCanvasMap = () => {
+          clearTimeout(startupTimer);
+          setMapFailed(true);
+        };
+        map.on("webglcontextlost", showCanvasMap);
         const switchToBasicMap = () => {
           if (ready || usingBasicMap) return;
           usingBasicMap = true;
           clearTimeout(startupTimer);
-          startupTimer = setTimeout(() => setMapFailed(true), 10_000);
+          startupTimer = setTimeout(showCanvasMap, 10_000);
           setBasicMap(true);
           map.setStyle(US_STYLE, { diff: false });
         };
@@ -411,14 +416,10 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
       {/* Fixed height on larger screens so the map key and list scroll inside the map area. */}
       <div className="relative flex min-h-0 flex-1 md:h-[78vh] md:min-h-[30rem] md:flex-none">
         <div className={`${view === "map" ? "flex" : "hidden"} relative min-h-[55vh] flex-1 md:flex`}>
-          {!mapFailed && (
-            <MapLegend serviceTypes={serviceTypes} selected={selectedServices} onToggle={toggleService} onReset={() => setSelectedServices([])} />
-          )}
+          <MapLegend serviceTypes={serviceTypes} selected={selectedServices} onToggle={toggleService} onReset={() => setSelectedServices([])} />
           <div className="relative min-w-0 flex-1">
             {mapFailed ? (
-              <div className="m-4 self-start rounded-md bg-warn-bg p-3 text-sm text-warn">
-                The map could not load on this device or network. Use the list — it shows the same results.
-              </div>
+              <BasicResourceMap bounds={bbox} sites={sites} selectedId={selectedId} />
             ) : (
               // Inline position wins over .maplibregl-map { position: relative } from MapLibre's stylesheet.
               <div ref={mapEl} tabIndex={-1} style={{ position: "absolute", inset: 0 }} role="region" aria-label="Resource map" />
@@ -427,7 +428,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         </div>
         <aside
           aria-label="Resource list"
-          className={`${view === "list" || mapFailed ? "block" : "hidden"} relative w-full overflow-y-auto border-l border-line bg-bg md:block md:w-[22rem] md:flex-none xl:w-[26rem] ${stale ? "opacity-70" : ""}`}
+          className={`${view === "list" ? "block" : "hidden"} relative w-full overflow-y-auto border-l border-line bg-bg md:block md:w-[22rem] md:flex-none xl:w-[26rem] ${stale ? "opacity-70" : ""}`}
         >
           {selected && <SiteDetail site={selected} stale={stale} onClose={() => setSelectedId(null)} />}
           <h2 className="px-3 pt-3 text-sm font-semibold text-muted">
@@ -438,7 +439,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
               <li key={s.id}>
                 <button
                   className={`card w-full p-3 text-left ${s.id === selectedId ? "ring-2 ring-brand" : ""}`}
-                  onClick={() => { setSelectedId(s.id); mapRef.current?.easeTo({ center: [s.lng, s.lat] }); }}
+                  onClick={() => { setSelectedId(s.id); if (!mapFailed) mapRef.current?.easeTo({ center: [s.lng, s.lat] }); }}
                 >
                   <div className="flex items-start gap-2">
                   {s.imageId && (
