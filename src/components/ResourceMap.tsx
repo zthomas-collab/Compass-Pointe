@@ -64,6 +64,8 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const pendingCamera = useRef<{ center: [number, number]; zoom: number } | null>(null);
   const [mapFailed, setMapFailed] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [basicMap, setBasicMap] = useState(false);
@@ -109,12 +111,13 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
     try {
       const res = await fetch(`/api/map/resources?${p}`, { signal: ctrl.signal, credentials: "same-origin" });
       const body = await res.json();
+      if (ctrl.signal.aborted) return;
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
       setData(body as MapResult);
       setLastSync(body.asOf);
       setError(null);
     } catch (err) {
-      if ((err as Error).name === "AbortError") return;
+      if (ctrl.signal.aborted) return;
       setError(navigator.onLine === false ? "You appear to be offline." : (err as Error).message || "Could not refresh.");
     } finally {
       if (abortRef.current === ctrl) setLoading(false);
@@ -123,8 +126,13 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
 
   useEffect(() => {
     const t = setTimeout(load, 250);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      abortRef.current?.abort();
+    };
   }, [load]);
+
+  useEffect(() => () => searchAbortRef.current?.abort(), []);
 
   // Refresh periodically so urgent availability changes appear without user action.
   useEffect(() => {
@@ -140,7 +148,14 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
   // ---- map setup -----------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    let startupTimer: ReturnType<typeof setTimeout>;
+    const showCanvasMap = () => {
+      cancelled = true;
+      clearTimeout(startupTimer);
+      setMapFailed(true);
+      setMapReady(false);
+    };
+    startupTimer = setTimeout(showCanvasMap, 15_000);
     (async () => {
       try {
         const maplibregl = await import("maplibre-gl");
@@ -162,6 +177,7 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         if (process.env.NODE_ENV !== "production") (window as unknown as { __icsMap?: MLMap }).__icsMap = map; // dev debugging only
         map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
         const sync = () => {
+          if (cancelled) return;
           const b = map.getBounds();
           setBbox({ w: Math.max(-180, b.getWest()), s: Math.max(-90, b.getSouth()), e: Math.min(180, b.getEast()), n: Math.min(90, b.getNorth()) });
           const c = map.getCenter();
@@ -169,79 +185,89 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         };
         let ready = false;
         let usingBasicMap = false;
-        const showCanvasMap = () => {
-          clearTimeout(startupTimer);
-          setMapFailed(true);
-        };
         map.on("webglcontextlost", showCanvasMap);
         const switchToBasicMap = () => {
-          if (ready || usingBasicMap) return;
+          if (cancelled || ready || usingBasicMap) return;
           usingBasicMap = true;
           clearTimeout(startupTimer);
           startupTimer = setTimeout(showCanvasMap, 10_000);
           setBasicMap(true);
-          map.setStyle(US_STYLE, { diff: false });
+          try {
+            map.setStyle(US_STYLE, { diff: false });
+          } catch {
+            showCanvasMap();
+          }
         };
+        clearTimeout(startupTimer);
         startupTimer = setTimeout(switchToBasicMap, 5_000);
         map.on("error", () => {
           if (!ready && !usingBasicMap) switchToBasicMap();
         });
         map.on("load", () => {
-          ready = true;
-          clearTimeout(startupTimer);
-          map.addSource("sites", { type: "geojson", data: { type: "FeatureCollection", features: [] }, cluster: true, clusterRadius: 45, clusterMaxZoom: 13 });
-          map.addLayer({ id: "clusters", type: "circle", source: "sites", filter: ["has", "point_count"],
-            paint: { "circle-color": BRAND_FOREST, "circle-opacity": 0.9, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 28], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
-          map.addLayer({ id: "cluster-count", type: "symbol", source: "sites", filter: ["has", "point_count"],
-            layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 13, "text-font": ["Noto Sans Regular"] }, paint: { "text-color": "#fff" } });
-          map.addLayer({ id: "points", type: "circle", source: "sites", filter: ["!", ["has", "point_count"]],
-            paint: {
-              "circle-radius": 14,
-              // Fill + code = organization type. Dark outline = restricted (signed-in only). See map key.
-              "circle-color": ["get", "color"],
-              "circle-stroke-width": ["case", ["get", "restricted"], 4, 2],
-              "circle-stroke-color": ["case", ["get", "restricted"], CHARCOAL, "#ffffff"],
-            } });
-          map.addLayer({ id: "point-labels", type: "symbol", source: "sites", filter: ["!", ["has", "point_count"]],
-            layout: { "text-field": ["get", "short"], "text-size": 10, "text-font": ["Noto Sans Bold"], "text-allow-overlap": true, "text-ignore-placement": true },
-            paint: { "text-color": "#ffffff" } });
-          // Availability badge (top-right of each marker): semantic color + letter, explained in the map key.
-          map.addLayer({ id: "status-badges", type: "circle", source: "sites", filter: ["!", ["has", "point_count"]],
-            paint: { "circle-radius": 7.5, "circle-translate": [12, -12], "circle-color": statusMatch("fill"),
-              "circle-stroke-width": 1.5, "circle-stroke-color": CHARCOAL } });
-          map.addLayer({ id: "status-letters", type: "symbol", source: "sites", filter: ["!", ["has", "point_count"]],
-            layout: { "text-field": ["get", "letter"], "text-size": 10, "text-font": ["Noto Sans Bold"], "text-allow-overlap": true, "text-ignore-placement": true },
-            paint: { "text-color": statusMatch("text"), "text-translate": [12, -12] } });
-          map.on("click", "clusters", async (e) => {
-            const f = map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0];
-            const src = map.getSource("sites") as GeoJSONSource;
-            const zoom = await src.getClusterExpansionZoom(f.properties.cluster_id as number);
-            map.easeTo({ center: (f.geometry as GeoJSON.Point).coordinates as [number, number], zoom });
-          });
-          map.on("click", "point-labels", (e) => {
-            const id = e.features?.[0]?.properties?.id as string | undefined;
-            if (id) setSelectedId(id);
-          });
-          map.on("click", "points", (e) => {
-            const id = e.features?.[0]?.properties?.id as string | undefined;
-            if (id) setSelectedId(id);
-          });
-          for (const l of ["status-badges", "status-letters"]) {
-            map.on("click", l, (e) => {
+          if (cancelled) return;
+          try {
+            ready = true;
+            clearTimeout(startupTimer);
+            map.addSource("sites", { type: "geojson", data: { type: "FeatureCollection", features: [] }, cluster: true, clusterRadius: 45, clusterMaxZoom: 13 });
+            map.addLayer({ id: "clusters", type: "circle", source: "sites", filter: ["has", "point_count"],
+              paint: { "circle-color": BRAND_FOREST, "circle-opacity": 0.9, "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 50, 28], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
+            map.addLayer({ id: "cluster-count", type: "symbol", source: "sites", filter: ["has", "point_count"],
+              layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 13, "text-font": ["Noto Sans Regular"] }, paint: { "text-color": "#fff" } });
+            map.addLayer({ id: "points", type: "circle", source: "sites", filter: ["!", ["has", "point_count"]],
+              paint: {
+                "circle-radius": 14,
+                // Fill + code = organization type. Dark outline = restricted (signed-in only). See map key.
+                "circle-color": ["get", "color"],
+                "circle-stroke-width": ["case", ["get", "restricted"], 4, 2],
+                "circle-stroke-color": ["case", ["get", "restricted"], CHARCOAL, "#ffffff"],
+              } });
+            map.addLayer({ id: "point-labels", type: "symbol", source: "sites", filter: ["!", ["has", "point_count"]],
+              layout: { "text-field": ["get", "short"], "text-size": 10, "text-font": ["Noto Sans Bold"], "text-allow-overlap": true, "text-ignore-placement": true },
+              paint: { "text-color": "#ffffff" } });
+            // Availability badge (top-right of each marker): semantic color + letter, explained in the map key.
+            map.addLayer({ id: "status-badges", type: "circle", source: "sites", filter: ["!", ["has", "point_count"]],
+              paint: { "circle-radius": 7.5, "circle-translate": [12, -12], "circle-color": statusMatch("fill"),
+                "circle-stroke-width": 1.5, "circle-stroke-color": CHARCOAL } });
+            map.addLayer({ id: "status-letters", type: "symbol", source: "sites", filter: ["!", ["has", "point_count"]],
+              layout: { "text-field": ["get", "letter"], "text-size": 10, "text-font": ["Noto Sans Bold"], "text-allow-overlap": true, "text-ignore-placement": true },
+              paint: { "text-color": statusMatch("text"), "text-translate": [12, -12] } });
+            map.on("click", "clusters", async (e) => {
+              const f = map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0];
+              const src = map.getSource("sites") as GeoJSONSource;
+              const zoom = await src.getClusterExpansionZoom(f.properties.cluster_id as number);
+              map.easeTo({ center: (f.geometry as GeoJSON.Point).coordinates as [number, number], zoom });
+            });
+            map.on("click", "point-labels", (e) => {
               const id = e.features?.[0]?.properties?.id as string | undefined;
               if (id) setSelectedId(id);
             });
+            map.on("click", "points", (e) => {
+              const id = e.features?.[0]?.properties?.id as string | undefined;
+              if (id) setSelectedId(id);
+            });
+            for (const l of ["status-badges", "status-letters"]) {
+              map.on("click", l, (e) => {
+                const id = e.features?.[0]?.properties?.id as string | undefined;
+                if (id) setSelectedId(id);
+              });
+            }
+            for (const l of ["clusters", "points", "point-labels", "status-badges"]) {
+              map.on("mouseenter", l, () => (map.getCanvas().style.cursor = "pointer"));
+              map.on("mouseleave", l, () => (map.getCanvas().style.cursor = ""));
+            }
+            if (pendingCamera.current) {
+              map.jumpTo(pendingCamera.current);
+              pendingCamera.current = null;
+            }
+            sync();
+            setMapReady(true);
+          } catch {
+            showCanvasMap();
           }
-          for (const l of ["clusters", "points", "point-labels", "status-badges"]) {
-            map.on("mouseenter", l, () => (map.getCanvas().style.cursor = "pointer"));
-            map.on("mouseleave", l, () => (map.getCanvas().style.cursor = ""));
-          }
-          setMapReady(true);
-          sync();
         });
         map.on("moveend", sync);
       } catch {
-        setMapFailed(true);
+        if (!cancelled) showCanvasMap();
       }
     })();
     return () => {
@@ -251,6 +277,13 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
       mapRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!mapFailed) return;
+    mapRef.current?.remove();
+    mapRef.current = null;
+    pendingCamera.current = null;
+  }, [mapFailed]);
 
   // Push data into the map source.
   useEffect(() => {
@@ -286,8 +319,10 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
   const stale = Boolean(error && data);
 
   function flyTo(lng: number, lat: number, zoom = 13) {
-    if (mapRef.current && !mapFailed) mapRef.current.flyTo({ center: [lng, lat], zoom });
+    const camera = { center: [lng, lat] as [number, number], zoom };
+    if (mapRef.current && mapReady) mapRef.current.flyTo(camera);
     else {
+      if (!mapFailed) pendingCamera.current = camera;
       setBbox(boundsAround(lng, lat, 0.1));
       setCenter({ lat, lng });
     }
@@ -297,10 +332,15 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
     e.preventDefault();
     if (query.trim().length < 2) return;
     const term = query.trim();
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
     try {
-      const res = await fetch(`/api/map/search?q=${encodeURIComponent(term)}`);
+      const res = await fetch(`/api/map/search?q=${encodeURIComponent(term)}`, { signal: controller.signal });
       const body = await res.json();
-      const found: PlaceHit[] = res.ok ? body.hits : [];
+      if (controller.signal.aborted) return;
+      if (!res.ok) throw new Error("Search failed");
+      const found: PlaceHit[] = body.hits;
       const zip = found.find((h) => h.kind === "zip");
       if (zip) {
         // A ZIP is a place: go there and let the viewport query list what's nearby.
@@ -312,8 +352,9 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         setHits(found);
       }
     } catch {
-      setSearchNote(null);
-      setHits([]);
+      if (controller.signal.aborted) return;
+      setSearchNote("Search is temporarily unavailable. Try again or use Find Help Near Me.");
+      setHits(null);
     }
   }
 
@@ -418,11 +459,10 @@ export default function ResourceMap({ categories, signedIn, serviceTypes, initia
         <div className={`${view === "map" ? "flex" : "hidden"} relative min-h-[55vh] flex-1 md:flex`}>
           <MapLegend serviceTypes={serviceTypes} selected={selectedServices} onToggle={toggleService} onReset={() => setSelectedServices([])} />
           <div className="relative min-w-0 flex-1">
-            {mapFailed ? (
-              <BasicResourceMap bounds={bbox} sites={sites} selectedId={selectedId} />
-            ) : (
+            {!mapReady && <BasicResourceMap bounds={bbox} sites={sites} selectedId={selectedId} />}
+            {!mapFailed && (
               // Inline position wins over .maplibregl-map { position: relative } from MapLibre's stylesheet.
-              <div ref={mapEl} tabIndex={-1} style={{ position: "absolute", inset: 0 }} role="region" aria-label="Resource map" />
+              <div ref={mapEl} tabIndex={-1} style={{ position: "absolute", inset: 0, visibility: mapReady ? "visible" : "hidden" }} role="region" aria-label="Resource map" />
             )}
           </div>
         </div>
